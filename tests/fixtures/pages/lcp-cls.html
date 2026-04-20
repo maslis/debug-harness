@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><title>LCP</title></head>
+<body>
+  <style>
+    .hero { width: 600px; height: 300px; background: #333; color: #fff; font-size: 48px; padding: 20px; }
+    .shift { position: absolute; top: 0; left: 0; width: 100%; height: 40px; background: red; }
+  </style>
+  <div class="hero" id="hero">Big LCP Element</div>
+  <script>
+    setTimeout(() => {
+      const s = document.createElement("div");
+      s.className = "shift";
+      document.body.appendChild(s);
+    }, 200);
+  </script>
+</body></html>

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Baseline</title></head>
+<body>
+  <main>
+    <h1>Baseline Page</h1>
+    <p>Hello from the fixture.</p>
+    <button id="greet">Greet</button>
+    <p id="greeting" hidden>Hi!</p>
+    <script>
+      document.getElementById("greet").addEventListener("click", () => {
+        document.getElementById("greeting").hidden = false;
+        console.log("greeted");
+      });
+    </script>
+  </main>
+</body>
+</html>
