@@ -6,6 +6,7 @@ import {
   attachNetworkLogger,
   createSafetyState,
   installRouteBlocker,
+  preClickGuard,
 } from "../../src/safety.ts";
 
 let browser: Browser;
@@ -50,5 +51,38 @@ describe("installRouteBlocker", () => {
     await ctx.close();
 
     expect(state.blockedAdRequests).toBe(0);
+  });
+});
+
+describe("preClickGuard", () => {
+  it("blocks clicks on elements inside google_ads_iframe_*", async () => {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.goto(`${fixture.url}/ad-iframe.html`);
+    const locator = page.locator("#google_ads_iframe_wrapper > iframe");
+    const result = await preClickGuard(page, locator, DEFAULT_AD_HOSTS);
+    expect(result?.kind).toBe("click_guard_blocked");
+    expect(result?.ancestorMatched).toMatch(/google_ads_iframe/);
+    await ctx.close();
+  });
+
+  it("blocks clicks on ins.adsbygoogle", async () => {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.goto(`${fixture.url}/ad-iframe.html`);
+    const locator = page.locator("ins.adsbygoogle");
+    const result = await preClickGuard(page, locator, DEFAULT_AD_HOSTS);
+    expect(result?.kind).toBe("click_guard_blocked");
+    await ctx.close();
+  });
+
+  it("allows clicks on non-ad elements", async () => {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.goto(`${fixture.url}/ad-iframe.html`);
+    const locator = page.locator("#real-button");
+    const result = await preClickGuard(page, locator, DEFAULT_AD_HOSTS);
+    expect(result).toBeNull();
+    await ctx.close();
   });
 });
