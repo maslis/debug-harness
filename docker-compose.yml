@@ -1,0 +1,14 @@
+services:
+  harness:
+    build: .
+    container_name: debug-harness
+    ports:
+      - "3939:3939"
+    volumes:
+      - ./artifacts:/app/artifacts
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - DEBUG_HARNESS_EXTRA_AD_HOSTS=
+      - DEBUG_HARNESS_EXTRA_AD_SELECTORS=
+    restart: unless-stopped
