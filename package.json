@@ -1,0 +1,33 @@
+{
+  "name": "debug-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "bin": { "debug": "./bin/debug.ts" },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "build:vendor": "cp node_modules/web-vitals/dist/web-vitals.iife.js vendor/web-vitals.iife.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:smoke": "vitest run tests/smoke",
+    "typecheck": "tsc --noEmit",
+    "debug": "tsx bin/debug.ts"
+  },
+  "dependencies": {
+    "fastify": "^5.1.0",
+    "playwright": "^1.50.0",
+    "pixelmatch": "^7.1.0",
+    "pngjs": "^7.0.0",
+    "web-vitals": "^5.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pngjs": "^6.0.5",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
