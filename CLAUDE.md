@@ -56,6 +56,37 @@ For compare runs: `artifacts/<runId>/{local,prod}/` + `diff.png` + `compare-meta
 For audit runs: `artifacts/<runId>/lighthouse.json` (full LHR), `viewport.png`,
 `meta.json` (Claude-friendly summary: scores, top opportunities, threshold failures, lab CWV).
 
+## Consumer setup tips (`debug test`)
+
+When wiring a project's `compose.test.yml` for `debug test`, these defaults
+prevent the most common failure modes:
+
+- **`shm_size: "1gb"`** is required. Default Docker `/dev/shm` is 64 MB;
+  Chromium under 4+ parallel workers crashes with `SIGSEGV` without it.
+  Symptom: tests fail with `Target page, context or browser has been closed`
+  and the launcher log shows `<process did exit: signal=SIGSEGV>`.
+- **Cap Playwright `workers` to ~4** for local runs. Astro dev servers
+  re-optimize deps under high concurrency and start serving 5xx; capping
+  workers also keeps memory in line with `shm_size`.
+- **Enable 1 local retry** (`retries: process.env.CI ? 2 : 1`). Dev-server
+  warm-up flakes account for most non-deterministic failures; CI gets more.
+- **Mount the project's `playwright.config.ts` read-only** into `/work` —
+  the harness image has no project config of its own; `debug test` calls
+  `/work/node_modules/.bin/playwright test --config /work/playwright.config.ts`.
+
+## Common cross-suite failure modes
+
+- **Browser crashed (SIGSEGV / context closed)** — almost always `/dev/shm`
+  too small. Fix in `compose.test.yml`, not in tests.
+- **Lots of tests fail with connection refused** — your dev server isn't
+  running. The container talks to your host via `host.docker.internal:PORT`.
+- **One test fails only under parallel load** — race on shared dev-server
+  state or async-deferred persistence. Use `await expect.poll(...)` or
+  `await expect(locator).toHaveText(...)` instead of read-then-assert.
+- **Audit perf scores look terrible** — dev mode has no compression /
+  minification / HTTP/2. Audit a production preview (`pnpm build && pnpm preview`)
+  for meaningful numbers.
+
 `summary.error.kind`:
 - `navigation_failed` — `goto` threw / 4xx-5xx on initial
 - `action_failed` — selector timeout or other Playwright error
