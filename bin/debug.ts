@@ -2,9 +2,13 @@
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const ENDPOINT = process.env.DEBUG_HARNESS_URL ?? "http://localhost:3939";
+// `import.meta.url` resolves through symlinks, so this works whether
+// `debug` is invoked directly or via /opt/homebrew/bin/debug symlink.
+const HARNESS_ARTIFACTS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "artifacts");
 
 async function main(): Promise<number> {
   const [, , cmd, ...rest] = process.argv;
@@ -337,8 +341,16 @@ function cmdDocker(args: string[]): Promise<number> {
 
 function cmdOpen(runId: string): Promise<number> {
   if (!runId) { console.error("usage: debug open <runId>"); return Promise.resolve(2); }
+  // Artifacts always live in the harness repo's artifacts/ dir (mounted into
+  // the container at /app/artifacts), regardless of which project's cwd
+  // invoked `debug capture`.
+  const target = resolve(HARNESS_ARTIFACTS, runId);
+  if (!existsSync(target)) {
+    console.error(`no artifact dir at ${target}`);
+    return Promise.resolve(2);
+  }
   return new Promise((res) => {
-    const proc = spawn("open", [`artifacts/${runId}`], { stdio: "inherit" });
+    const proc = spawn("open", [target], { stdio: "inherit" });
     proc.on("exit", (code) => res(code ?? 0));
   });
 }
