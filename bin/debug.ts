@@ -236,6 +236,9 @@ async function cmdTest(args: string[]): Promise<number> {
     console.error("no compose.test.yml in cwd — see debug-harness README for setup");
     return 2;
   }
+  // Invoke playwright's binary directly; pnpm would require a package.json
+  // in /work, which consumer projects don't have. The binary is reachable
+  // via /work/node_modules → /app/node_modules symlink baked into the image.
   return new Promise((res) => {
     const proc = spawn(
       "docker",
@@ -243,7 +246,8 @@ async function cmdTest(args: string[]): Promise<number> {
         "compose",
         "-f", composeFile,
         "run", "--rm", "test",
-        "pnpm", "playwright", "test",
+        "/work/node_modules/.bin/playwright", "test",
+        "--config", "/work/playwright.config.ts",
         ...args,
       ],
       { stdio: "inherit" },
