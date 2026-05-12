@@ -1,17 +1,29 @@
 # debug-harness — AI guide
 
-Standalone HTTP debug harness. Captures rich page state (screenshots, DOM, console, network, computed styles, Core Web Vitals) for any URL, with safe action scripting and local-vs-prod diffing.
+HTTP harness for browser-driven debugging, performance auditing, and durable e2e testing.
+Captures rich page state, runs Lighthouse audits, executes Playwright test specs from
+consumer projects — all against the same Chromium instance in Docker.
 
-## When to use it
-- Styling regressions, component layout bugs, hydration/mount failures in SPA/SSR apps.
-- Comparing a local dev build against production ("why does mine look different").
-- Mobile layout checks without touching a real device (`--device "iPhone 13"`).
-- Quick console/network/error snapshots when a user reports "something broke on /foo".
+Published image: `ghcr.io/maslis/debug-harness:latest` (consumed by per-project
+`compose.test.yml`). The repo's own `docker-compose.yml` is for harness development.
+
+## Choosing a command
+
+| Use case                                              | Command       | Speed |
+|-------------------------------------------------------|---------------|-------|
+| "Why does this page look broken?" (one-off snapshot)  | `capture`     | ~3 s  |
+| "Does local match prod?" (visual diff)                | `compare`     | ~6 s  |
+| "Why is perf/a11y/SEO bad here?" (deep audit)         | `audit`       | ~30 s |
+| "Did my fix improve the audit?" (compare 2 audits)    | `audit-diff`  | <1 s  |
+| "Run my project's e2e specs" (durable assertions)     | `test`        | varies|
+
+Rough rule: `capture` for ad-hoc inspection, `audit` for actionable perf/a11y signal,
+`test` for durable specs that live in the project repo.
 
 ## When NOT to use it
-- Assertion-style e2e testing (use Playwright test runner directly).
-- CI — this is a local debugging tool.
-- Anything requiring multi-browser (Firefox/WebKit not wired up).
+- CI — this is a local-first tool. (CI projects should run Playwright directly.)
+- Multi-browser checks — Chromium only.
+- Production traffic monitoring — use a proper RUM/synthetic service.
 
 ## Operating it
 
@@ -20,6 +32,9 @@ debug up                                             # start service
 debug health                                         # verify it's alive
 debug capture http://localhost:4322/ --inspect "h1,.card"
 debug compare http://localhost:4322/ https://setalarmclock.net/
+debug audit http://localhost:4322/ --thresholds=performance:90,accessibility:95
+debug audit-diff <runId-before> <runId-after>
+debug test                                           # runs project's tests/*.spec.ts in container
 debug capture http://localhost:4322/ --device "iPhone 13"
 debug down                                           # stop when done
 ```
@@ -38,11 +53,15 @@ Each run lands in `artifacts/<runId>/`:
 
 For compare runs: `artifacts/<runId>/{local,prod}/` + `diff.png` + `compare-meta.json`.
 
+For audit runs: `artifacts/<runId>/lighthouse.json` (full LHR), `viewport.png`,
+`meta.json` (Claude-friendly summary: scores, top opportunities, threshold failures, lab CWV).
+
 `summary.error.kind`:
 - `navigation_failed` — `goto` threw / 4xx-5xx on initial
 - `action_failed` — selector timeout or other Playwright error
 - `click_guard_blocked` — safety layer refused
 - `browser_crashed` — Chromium died
+- `lighthouse_failed` — Lighthouse threw (CDP issue, audit timeout, etc.)
 - `internal` — harness bug
 
 ## Safety rules (do not bypass)

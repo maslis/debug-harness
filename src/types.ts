@@ -86,11 +86,83 @@ export const CompareRequestSchema = z.object({
 });
 export type CompareRequest = z.infer<typeof CompareRequestSchema>;
 
+export const LighthouseCategorySchema = z.enum([
+  "performance",
+  "accessibility",
+  "best-practices",
+  "seo",
+]);
+export type LighthouseCategory = z.infer<typeof LighthouseCategorySchema>;
+
+export const AuditRequestSchema = z.object({
+  url: z.string().url(),
+  viewport: ViewportSchema.optional(),
+  device: z.string().nullable().optional(),
+  actions: z.array(ActionSchema).default([]),
+  allowAds: z.boolean().default(false),
+  blockHosts: z.array(z.string().min(1)).default([]),
+  settleMs: z.number().int().nonnegative().default(500),
+  runId: z.string().min(1).optional(),
+  categories: z.array(LighthouseCategorySchema).default([
+    "performance",
+    "accessibility",
+    "best-practices",
+    "seo",
+  ]),
+  thresholds: z.record(LighthouseCategorySchema, z.number().min(0).max(100)).default({}),
+  preset: z.enum(["mobile", "desktop"]).default("desktop"),
+});
+export type AuditRequest = z.infer<typeof AuditRequestSchema>;
+
+export interface AuditOpportunity {
+  id: string;
+  title: string;
+  description: string;
+  score: number | null;
+  wastedMs: number | null;
+  wastedBytes: number | null;
+  displayValue: string | null;
+}
+
+export interface AuditFailedCheck {
+  id: string;
+  title: string;
+  score: number | null;
+  displayValue: string | null;
+  category: LighthouseCategory;
+}
+
+export interface AuditSummary {
+  finalUrl: string;
+  fetchTime: string;
+  scores: Record<LighthouseCategory, number | null>;
+  opportunities: AuditOpportunity[];
+  failedAudits: AuditFailedCheck[];
+  thresholdFailures: Array<{ category: LighthouseCategory; score: number; min: number }>;
+  cwv: {
+    lcpMs: number | null;
+    cls: number | null;
+    fcpMs: number | null;
+    ttfbMs: number | null;
+    tbtMs: number | null;
+    speedIndex: number | null;
+  };
+  error?: { kind: ErrorKind; reason: string; detail?: unknown };
+}
+
+export interface AuditResult {
+  runId: string;
+  artifactDir: string;
+  files: Record<string, string>;
+  summary: AuditSummary;
+}
+
 export type ErrorKind =
   | "navigation_failed"
   | "action_failed"
   | "click_guard_blocked"
   | "browser_crashed"
+  | "lighthouse_failed"
   | "internal";
 
 export interface CaptureSummary {
