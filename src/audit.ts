@@ -70,7 +70,10 @@ export async function audit(
     if (!fail) {
       await page.waitForTimeout(req.settleMs);
       try {
-        const lhResult = await playAudit({
+        // playwright-lighthouse pins playwright-core at a different minor than
+        // playwright/@playwright/test, producing a structural Page-type mismatch
+        // at compile time. Runtime API is identical for the methods we touch.
+        const playAuditConfig = {
           page,
           port: cdpPort,
           thresholds: {},
@@ -83,7 +86,8 @@ export async function audit(
               : { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false },
           },
           reports: { formats: { json: true, html: false }, name: "lighthouse" },
-        } as Parameters<typeof playAudit>[0]);
+        } as unknown as Parameters<typeof playAudit>[0];
+        const lhResult = await playAudit(playAuditConfig);
         lhrJson = (lhResult as { lhr: unknown }).lhr;
       } catch (err) {
         lighthouseError = { reason: (err as Error).message };
