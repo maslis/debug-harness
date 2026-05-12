@@ -1,6 +1,6 @@
 {
   "name": "debug-harness",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22" },
@@ -8,7 +8,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
-    "build:vendor": "cp node_modules/web-vitals/dist/web-vitals.iife.js vendor/web-vitals.iife.js",
+    "build:vendor": "mkdir -p vendor && cp node_modules/web-vitals/dist/web-vitals.iife.js vendor/web-vitals.iife.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:smoke": "vitest run --config vitest.smoke.config.ts",

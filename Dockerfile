@@ -8,11 +8,10 @@ COPY package.json pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile || pnpm install
 
 COPY tsconfig.json ./
-COPY vendor ./vendor
 COPY src ./src
 COPY bin ./bin
 
-RUN pnpm build:vendor || true
+RUN pnpm build:vendor
 
 ENV PORT=3939 HOST=0.0.0.0 NODE_ENV=production
 EXPOSE 3939
