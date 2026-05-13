@@ -35,8 +35,8 @@ export async function capture(
   const evaluations: Record<string, unknown> = {};
 
   const contextOpts = req.device && devices[req.device]
-    ? { ...devices[req.device] }
-    : { viewport: req.viewport ?? { width: 1440, height: 900 } };
+    ? { ignoreHTTPSErrors: true, ...devices[req.device] }
+    : { ignoreHTTPSErrors: true, viewport: req.viewport ?? { width: 1440, height: 900 } };
   const context: BrowserContext = await browser.newContext(contextOpts);
   await installRouteBlocker(context, state, { blocklist, allowAds: req.allowAds });
   await installVitals(context);
