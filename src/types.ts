@@ -59,6 +59,12 @@ export const ActionSchema = z.discriminatedUnion("op", [
 ]);
 export type Action = z.infer<typeof ActionSchema>;
 
+// Extra HTTP headers attached to every request the browser makes during
+// a run. Use cases: bypass headers for upstream WAF/bot-fight rules,
+// auth tokens for staging, A/B test cohort overrides. Each consumer
+// picks their own header name; nothing here is project-specific.
+export const HeadersSchema = z.record(z.string().min(1), z.string()).optional();
+
 export const CaptureRequestSchema = z.object({
   url: z.string().url(),
   viewport: ViewportSchema.optional(),
@@ -69,6 +75,7 @@ export const CaptureRequestSchema = z.object({
   blockHosts: z.array(z.string().min(1)).default([]),
   settleMs: z.number().int().nonnegative().default(500),
   runId: z.string().min(1).optional(),
+  headers: HeadersSchema,
 });
 export type CaptureRequest = z.infer<typeof CaptureRequestSchema>;
 
@@ -77,6 +84,9 @@ export const CompareRequestSchema = z.object({
   prod: CaptureRequestSchema.partial().required({ url: true }),
   viewport: ViewportSchema.optional(),
   device: z.string().nullable().optional(),
+  // Top-level headers apply to BOTH local and prod sub-requests. Per-capture
+  // headers (req.local.headers / req.prod.headers) override on key overlap.
+  headers: HeadersSchema,
   diff: z
     .object({
       threshold: z.number().min(0).max(1).default(0.1),
@@ -111,6 +121,7 @@ export const AuditRequestSchema = z.object({
   ]),
   thresholds: z.record(LighthouseCategorySchema, z.number().min(0).max(100)).default({}),
   preset: z.enum(["mobile", "desktop"]).default("desktop"),
+  headers: HeadersSchema,
 });
 export type AuditRequest = z.infer<typeof AuditRequestSchema>;
 

@@ -40,6 +40,16 @@ export async function compareRuns(
 ): Promise<CompareResult> {
   const runId = buildRunId("compare");
   const sharedViewport = req.viewport;
+  // Top-level req.headers is the shared baseline for both local and prod.
+  // Per-capture headers (req.local.headers / req.prod.headers) take priority
+  // on key overlap so JSON consumers can override per side.
+  const mergeHeaders = (
+    perCapture: Record<string, string> | undefined,
+  ): Record<string, string> | undefined => {
+    const top = req.headers;
+    if (!top && !perCapture) return undefined;
+    return { ...(top ?? {}), ...(perCapture ?? {}) };
+  };
   const mergedProd = {
     actions: req.local.actions,
     inspect: req.local.inspect,
@@ -49,11 +59,17 @@ export async function compareRuns(
     ...req.prod,
     viewport: sharedViewport ?? req.local.viewport,
     device: req.device ?? req.prod.device ?? req.local.device,
+    headers: mergeHeaders(req.prod.headers),
   };
 
   const local = await capture(
     browser,
-    { ...req.local, viewport: sharedViewport ?? req.local.viewport, device: req.device ?? req.local.device },
+    {
+      ...req.local,
+      viewport: sharedViewport ?? req.local.viewport,
+      device: req.device ?? req.local.device,
+      headers: mergeHeaders(req.local.headers),
+    },
     { subpath: "local", runIdOverride: runId },
   );
   const prod = await capture(

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CaptureRequestSchema, ActionSchema } from "../../src/types.ts";
+import {
+  ActionSchema,
+  AuditRequestSchema,
+  CaptureRequestSchema,
+  CompareRequestSchema,
+} from "../../src/types.ts";
 
 describe("ActionSchema", () => {
   it("accepts a valid waitFor action", () => {
@@ -45,5 +50,48 @@ describe("CaptureRequestSchema", () => {
       device: "iPhone 13",
     });
     expect(parsed.device).toBe("iPhone 13");
+  });
+
+  it("accepts optional headers map", () => {
+    const parsed = CaptureRequestSchema.parse({
+      url: "http://localhost:4322/",
+      headers: { "x-test": "1", "x-other": "two" },
+    });
+    expect(parsed.headers).toEqual({ "x-test": "1", "x-other": "two" });
+  });
+
+  it("leaves headers undefined when omitted (backwards compat)", () => {
+    const parsed = CaptureRequestSchema.parse({ url: "http://localhost:4322/" });
+    expect(parsed.headers).toBeUndefined();
+  });
+
+  it("rejects empty-string header name", () => {
+    expect(() =>
+      CaptureRequestSchema.parse({
+        url: "http://localhost:4322/",
+        headers: { "": "value" },
+      }),
+    ).toThrow();
+  });
+});
+
+describe("CompareRequestSchema headers", () => {
+  it("accepts top-level headers applied to both sub-requests", () => {
+    const parsed = CompareRequestSchema.parse({
+      local: { url: "http://localhost:4322/" },
+      prod: { url: "https://example.com/" },
+      headers: { "x-bypass": "yes" },
+    });
+    expect(parsed.headers).toEqual({ "x-bypass": "yes" });
+  });
+});
+
+describe("AuditRequestSchema headers", () => {
+  it("accepts optional headers map", () => {
+    const parsed = AuditRequestSchema.parse({
+      url: "https://example.com/",
+      headers: { "x-bypass": "1" },
+    });
+    expect(parsed.headers).toEqual({ "x-bypass": "1" });
   });
 });

@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { collectHeaders, HeaderParseError } from "../src/headers.ts";
 
 const ENDPOINT = process.env.DEBUG_HARNESS_URL ?? "http://localhost:3939";
 // `import.meta.url` resolves through symlinks, so this works whether
@@ -45,6 +46,7 @@ Flags:
   --actions <path|-|json> --inspect <sel,sel,...>
   --allow-ads             --block-host <host>          (repeatable)
   --settle <ms>           --run-id <name>
+  --header "Name: Value"  (repeatable; applied to every request)
   --timeout <ms>          --json                        --quiet`);
 }
 
@@ -65,10 +67,12 @@ function parseFlags(args: string[]): {
   categories?: string[];
   thresholds?: Record<string, number>;
   preset?: "mobile" | "desktop";
+  headers?: Record<string, string>;
 } {
   const out: ReturnType<typeof parseFlags> = {
     positional: [], blockHosts: [], json: false, quiet: false,
   };
+  const rawHeaders: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     const next = () => args[++i] ?? "";
@@ -103,7 +107,19 @@ function parseFlags(args: string[]): {
         if (v === "mobile" || v === "desktop") out.preset = v;
         break;
       }
+      case "--header": rawHeaders.push(next()); break;
       default: out.positional.push(a);
+    }
+  }
+  if (rawHeaders.length > 0) {
+    try {
+      out.headers = collectHeaders(rawHeaders);
+    } catch (err) {
+      if (err instanceof HeaderParseError) {
+        console.error(`debug: ${err.message}: ${JSON.stringify(err.input)}`);
+        process.exit(2);
+      }
+      throw err;
     }
   }
   return out;
@@ -163,6 +179,7 @@ async function cmdCapture(args: string[]): Promise<number> {
     blockHosts: p.blockHosts,
     settleMs: p.settleMs,
     runId: p.runId,
+    headers: p.headers,
   };
   return sendAndPrint("/capture", payload, p);
 }
@@ -180,6 +197,7 @@ async function cmdCompare(args: string[]): Promise<number> {
     },
     prod: { url: prod },
     viewport: p.viewport, device: p.device,
+    headers: p.headers,
   };
   return sendAndPrint("/compare", payload, p);
 }
@@ -200,6 +218,7 @@ async function cmdAudit(args: string[]): Promise<number> {
     categories: p.categories,
     thresholds: p.thresholds,
     preset: p.preset,
+    headers: p.headers,
   };
   return sendAndPrint("/audit", payload, p);
 }
