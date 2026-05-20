@@ -4,7 +4,39 @@ import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { collectHeaders, HeaderParseError } from "../src/headers.ts";
+
+// Header parsing is inlined here (mirroring src/headers.ts) rather than
+// imported. Consumer projects COPY only /app/bin/debug.ts out of the
+// published image; an `import "../src/headers.ts"` would resolve to a
+// path that does not exist on their filesystem. Keep this file
+// import-free from src/. If you change parsing semantics, update both
+// this block and src/headers.ts together.
+class HeaderParseError extends Error {
+  readonly input: string;
+  constructor(message: string, input: string) {
+    super(message);
+    this.name = "HeaderParseError";
+    this.input = input;
+  }
+}
+
+function parseHeaderArg(input: string): [string, string] {
+  const idx = input.indexOf(":");
+  if (idx === -1) throw new HeaderParseError(`missing ':' in --header value`, input);
+  const name = input.slice(0, idx).trim();
+  const value = input.slice(idx + 1).trim();
+  if (name === "") throw new HeaderParseError(`empty header name in --header value`, input);
+  return [name, value];
+}
+
+function collectHeaders(args: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const a of args) {
+    const [name, value] = parseHeaderArg(a);
+    out[name] = value;
+  }
+  return out;
+}
 
 const ENDPOINT = process.env.DEBUG_HARNESS_URL ?? "http://localhost:3939";
 // `import.meta.url` resolves through symlinks, so this works whether
