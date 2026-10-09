@@ -44,101 +44,103 @@ export async function audit(
     ? { ...baseOpts, extraHTTPHeaders: req.headers }
     : baseOpts;
   const context: BrowserContext = await browser.newContext(contextOpts);
-  await installRouteBlocker(context, state, { blocklist, allowAds: req.allowAds });
-
-  const page = await context.newPage();
-  attachNetworkLogger(page, state);
-  page.on("console", (m: ConsoleMessage) => {
-    consoleLines.push(`[${m.type().toUpperCase()}] ${m.text()}`);
-  });
-
-  let fail: ActionFailure | null = null;
-  let lighthouseError: { reason: string; detail?: unknown } | null = null;
-  let lhrJson: unknown = null;
-  let screenshot: Buffer | null = null;
-
   try {
-    await page.goto(target, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await installRouteBlocker(context, state, { blocklist, allowAds: req.allowAds });
 
-    fail = await runActions(req.actions, {
-      page,
-      context,
-      blocklist,
-      extraGuardSelectors: [],
-      state,
-      evaluations,
-      defaultTimeout: 5000,
+    const page = await context.newPage();
+    attachNetworkLogger(page, state);
+    page.on("console", (m: ConsoleMessage) => {
+      consoleLines.push(`[${m.type().toUpperCase()}] ${m.text()}`);
     });
 
-    if (!fail) {
-      await page.waitForTimeout(req.settleMs);
-      try {
-        // playwright-lighthouse pins playwright-core at a different minor than
-        // playwright/@playwright/test, producing a structural Page-type mismatch
-        // at compile time. Runtime API is identical for the methods we touch.
-        const playAuditConfig = {
-          page,
-          port: cdpPort,
-          thresholds: {},
-          opts: {
-            onlyCategories: req.categories,
-            preset: req.preset === "mobile" ? "perf" : undefined,
-            formFactor: req.preset,
-            screenEmulation: req.preset === "desktop"
-              ? { mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false }
-              : { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false },
-          },
-          reports: { formats: { json: true, html: false }, name: "lighthouse" },
-        } as unknown as Parameters<typeof playAudit>[0];
-        const lhResult = await playAudit(playAuditConfig);
-        lhrJson = (lhResult as { lhr: unknown }).lhr;
-      } catch (err) {
-        lighthouseError = { reason: (err as Error).message };
+    let fail: ActionFailure | null = null;
+    let lighthouseError: { reason: string; detail?: unknown } | null = null;
+    let lhrJson: unknown = null;
+    let screenshot: Buffer | null = null;
+
+    try {
+      await page.goto(target, { waitUntil: "domcontentloaded", timeout: 30_000 });
+
+      fail = await runActions(req.actions, {
+        page,
+        context,
+        blocklist,
+        extraGuardSelectors: [],
+        state,
+        evaluations,
+        defaultTimeout: 5000,
+      });
+
+      if (!fail) {
+        await page.waitForTimeout(req.settleMs);
+        try {
+          // playwright-lighthouse pins playwright-core at a different minor than
+          // playwright/@playwright/test, producing a structural Page-type mismatch
+          // at compile time. Runtime API is identical for the methods we touch.
+          const playAuditConfig = {
+            page,
+            port: cdpPort,
+            thresholds: {},
+            opts: {
+              onlyCategories: req.categories,
+              preset: req.preset === "mobile" ? "perf" : undefined,
+              formFactor: req.preset,
+              screenEmulation: req.preset === "desktop"
+                ? { mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false }
+                : { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false },
+            },
+            reports: { formats: { json: true, html: false }, name: "lighthouse" },
+          } as unknown as Parameters<typeof playAudit>[0];
+          const lhResult = await playAudit(playAuditConfig);
+          lhrJson = (lhResult as { lhr: unknown }).lhr;
+        } catch (err) {
+          lighthouseError = { reason: (err as Error).message };
+        }
+
+        try {
+          screenshot = await page.screenshot({ fullPage: false });
+        } catch { /* non-fatal */ }
       }
-
-      try {
-        screenshot = await page.screenshot({ fullPage: false });
-      } catch { /* non-fatal */ }
+    } catch (err) {
+      fail = {
+        kind: "action_failed",
+        actionIndex: -1,
+        op: "goto",
+        reason: (err as Error).message,
+      };
     }
-  } catch (err) {
-    fail = {
-      kind: "action_failed",
-      actionIndex: -1,
-      op: "goto",
-      reason: (err as Error).message,
-    };
+
+    const files: Record<string, string> = {};
+    if (lhrJson) {
+      files.lighthouse = await writeJson(run.absDir, "lighthouse.json", lhrJson);
+    }
+    if (screenshot) {
+      files.viewport = await writeBinary(run.absDir, "viewport.png", screenshot);
+    }
+    files.console = await writeJson(run.absDir, "console.json", consoleLines);
+    files.network = await writeJson(run.absDir, "network.json", state.net);
+
+    const summary = buildSummary({
+      lhr: lhrJson,
+      target,
+      pageUrl: page.url(),
+      thresholds: req.thresholds,
+      fail,
+      lighthouseError,
+    });
+
+    files.meta = await writeJson(run.absDir, "meta.json", {
+      harnessVersion: HARNESS_VERSION,
+      request: req,
+      target,
+      evaluations,
+      summary,
+    });
+
+    return { runId, artifactDir: run.relDir, files, summary };
+  } finally {
+    await context.close().catch(() => {});
   }
-
-  const files: Record<string, string> = {};
-  if (lhrJson) {
-    files.lighthouse = await writeJson(run.absDir, "lighthouse.json", lhrJson);
-  }
-  if (screenshot) {
-    files.viewport = await writeBinary(run.absDir, "viewport.png", screenshot);
-  }
-  files.console = await writeJson(run.absDir, "console.json", consoleLines);
-  files.network = await writeJson(run.absDir, "network.json", state.net);
-
-  const summary = buildSummary({
-    lhr: lhrJson,
-    target,
-    pageUrl: page.url(),
-    thresholds: req.thresholds,
-    fail,
-    lighthouseError,
-  });
-
-  files.meta = await writeJson(run.absDir, "meta.json", {
-    harnessVersion: HARNESS_VERSION,
-    request: req,
-    target,
-    evaluations,
-    summary,
-  });
-
-  await context.close();
-
-  return { runId, artifactDir: run.relDir, files, summary };
 }
 
 interface BuildSummaryArgs {
