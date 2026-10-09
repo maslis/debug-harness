@@ -41,116 +41,118 @@ export async function capture(
     ? { ...baseOpts, extraHTTPHeaders: req.headers }
     : baseOpts;
   const context: BrowserContext = await browser.newContext(contextOpts);
-  await installRouteBlocker(context, state, { blocklist, allowAds: req.allowAds });
-  await installVitals(context);
+  try {
+    await installRouteBlocker(context, state, { blocklist, allowAds: req.allowAds });
+    await installVitals(context);
 
-  const page = await context.newPage();
-  attachNetworkLogger(page, state);
-  page.on("console", (m: ConsoleMessage) => {
-    const loc = m.location();
-    consoleLines.push(
-      `[${m.type().toUpperCase()}] [${new Date().toISOString()}] ${m.text()} (${loc.url}:${loc.lineNumber})`,
-    );
-    if (m.type() === "error") {
+    const page = await context.newPage();
+    attachNetworkLogger(page, state);
+    page.on("console", (m: ConsoleMessage) => {
+      const loc = m.location();
+      consoleLines.push(
+        `[${m.type().toUpperCase()}] [${new Date().toISOString()}] ${m.text()} (${loc.url}:${loc.lineNumber})`,
+      );
+      if (m.type() === "error") {
+        errors.push({
+          type: "console.error",
+          message: m.text(),
+          timestamp: new Date().toISOString(),
+        });
+      }
+    });
+    page.on("pageerror", (err) => {
       errors.push({
-        type: "console.error",
-        message: m.text(),
+        type: "pageerror",
+        message: err.message,
+        stack: err.stack,
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    let initialStatus: number | null = null;
+    let fail: ActionFailure | null = null;
+    try {
+      const res = await page.goto(target, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      initialStatus = res?.status() ?? null;
+
+      fail = await runActions(req.actions, {
+        page,
+        context,
+        blocklist,
+        extraGuardSelectors: [],
+        state,
+        evaluations,
+        defaultTimeout: 5000,
+      });
+
+      if (!fail) await page.waitForTimeout(req.settleMs);
+    } catch (err) {
+      fail = {
+        kind: "action_failed",
+        actionIndex: -1,
+        op: "goto",
+        reason: (err as Error).message,
+      };
+    }
+
+    // Always capture what we can, even on failure.
+    const files: Record<string, string> = {};
+    try {
+      files.viewport = await writeBinary(run.absDir, "viewport.png", await page.screenshot({ fullPage: false }));
+      files.fullPage = await writeBinary(run.absDir, "full.png", await page.screenshot({ fullPage: true }));
+      files.dom = await writeText(run.absDir, "dom.html", await page.content());
+      const consoleHeader = `# run: ${runId} target: ${target}`;
+      const consoleBody = consoleLines.length > 0 ? `${consoleHeader}\n${consoleLines.join("\n")}` : consoleHeader;
+      files.console = await writeText(run.absDir, "console.log", consoleBody);
+      files.network = await writeJson(run.absDir, "network.json", state.net);
+      files.errors = await writeJson(run.absDir, "errors.json", errors);
+      files.computedStyles = await writeJson(
+        run.absDir,
+        "computed-styles.json",
+        await inspectSelectors(page, req.inspect),
+      );
+      files.vitals = await writeJson(run.absDir, "web-vitals.json", await readVitals(page));
+    } catch (err) {
+      errors.push({
+        type: "internal",
+        message: `artifact write failed: ${(err as Error).message}`,
         timestamp: new Date().toISOString(),
       });
     }
-  });
-  page.on("pageerror", (err) => {
-    errors.push({
-      type: "pageerror",
-      message: err.message,
-      stack: err.stack,
-      timestamp: new Date().toISOString(),
-    });
-  });
 
-  let initialStatus: number | null = null;
-  let fail: ActionFailure | null = null;
-  try {
-    const res = await page.goto(target, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    initialStatus = res?.status() ?? null;
-
-    fail = await runActions(req.actions, {
-      page,
-      context,
-      blocklist,
-      extraGuardSelectors: [],
-      state,
-      evaluations,
-      defaultTimeout: 5000,
-    });
-
-    if (!fail) await page.waitForTimeout(req.settleMs);
-  } catch (err) {
-    fail = {
-      kind: "action_failed",
-      actionIndex: -1,
-      op: "goto",
-      reason: (err as Error).message,
+    const vitals = await readVitals(page).catch(() => null);
+    const summary: CaptureSummary = {
+      finalUrl: page.url(),
+      title: await page.title().catch(() => ""),
+      statusCode: initialStatus,
+      pageErrors: errors.filter((e) => e.type === "pageerror").length,
+      consoleErrors: errors.filter((e) => e.type === "console.error").length,
+      requests: state.net.length,
+      failedRequests: state.net.filter((n) => n.status !== null && n.status >= 400).length,
+      blockedAdRequests: state.blockedAdRequests,
+      clickGuardBlocks: state.clickGuardBlocks,
+      actionsRun: fail ? Math.max(0, fail.actionIndex) : req.actions.length,
+      actionsFailed: fail ? 1 : 0,
+      lcpMs: vitals?.lcp?.value ?? null,
+      cls: vitals?.cls?.value ?? null,
+      inpMs: vitals?.inp?.value ?? null,
+      error: fail
+        ? { kind: fail.kind, actionIndex: fail.actionIndex, op: fail.op, reason: fail.reason }
+        : undefined,
     };
-  }
 
-  // Always capture what we can, even on failure.
-  const files: Record<string, string> = {};
-  try {
-    files.viewport = await writeBinary(run.absDir, "viewport.png", await page.screenshot({ fullPage: false }));
-    files.fullPage = await writeBinary(run.absDir, "full.png", await page.screenshot({ fullPage: true }));
-    files.dom = await writeText(run.absDir, "dom.html", await page.content());
-    const consoleHeader = `# run: ${runId} target: ${target}`;
-    const consoleBody = consoleLines.length > 0 ? `${consoleHeader}\n${consoleLines.join("\n")}` : consoleHeader;
-    files.console = await writeText(run.absDir, "console.log", consoleBody);
-    files.network = await writeJson(run.absDir, "network.json", state.net);
-    files.errors = await writeJson(run.absDir, "errors.json", errors);
-    files.computedStyles = await writeJson(
-      run.absDir,
-      "computed-styles.json",
-      await inspectSelectors(page, req.inspect),
-    );
-    files.vitals = await writeJson(run.absDir, "web-vitals.json", await readVitals(page));
-  } catch (err) {
-    errors.push({
-      type: "internal",
-      message: `artifact write failed: ${(err as Error).message}`,
-      timestamp: new Date().toISOString(),
+    files.meta = await writeJson(run.absDir, "meta.json", {
+      harnessVersion: HARNESS_VERSION,
+      request: req,
+      target,
+      evaluations,
+      summary,
     });
+
+    return { runId, artifactDir: run.relDir, files, summary };
+  } finally {
+    await context.close().catch(() => {});
   }
-
-  const vitals = await readVitals(page).catch(() => null);
-  const summary: CaptureSummary = {
-    finalUrl: page.url(),
-    title: await page.title().catch(() => ""),
-    statusCode: initialStatus,
-    pageErrors: errors.filter((e) => e.type === "pageerror").length,
-    consoleErrors: errors.filter((e) => e.type === "console.error").length,
-    requests: state.net.length,
-    failedRequests: state.net.filter((n) => n.status !== null && n.status >= 400).length,
-    blockedAdRequests: state.blockedAdRequests,
-    clickGuardBlocks: state.clickGuardBlocks,
-    actionsRun: fail ? Math.max(0, fail.actionIndex) : req.actions.length,
-    actionsFailed: fail ? 1 : 0,
-    lcpMs: vitals?.lcp?.value ?? null,
-    cls: vitals?.cls?.value ?? null,
-    inpMs: vitals?.inp?.value ?? null,
-    error: fail
-      ? { kind: fail.kind, actionIndex: fail.actionIndex, op: fail.op, reason: fail.reason }
-      : undefined,
-  };
-
-  files.meta = await writeJson(run.absDir, "meta.json", {
-    harnessVersion: HARNESS_VERSION,
-    request: req,
-    target,
-    evaluations,
-    summary,
-  });
-
-  await context.close();
-
-  return { runId, artifactDir: run.relDir, files, summary };
 }
 
 async function inspectSelectors(

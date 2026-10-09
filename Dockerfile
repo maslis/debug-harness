@@ -1,5 +1,10 @@
 FROM mcr.microsoft.com/playwright:v1.59.1-jammy
 
+# tini as PID 1 reaps orphaned/reparented Chromium helpers (no zombies).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tini \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 RUN npm install -g pnpm@9
@@ -21,4 +26,5 @@ ENV PORT=3939 HOST=0.0.0.0 NODE_ENV=production
 EXPOSE 3939
 VOLUME ["/app/artifacts"]
 
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["pnpm", "start"]
