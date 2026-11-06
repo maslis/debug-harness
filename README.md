@@ -130,25 +130,20 @@ Rules that are not config: arguments are an argv, never a shell. Paths are resol
 
 ### Calling it
 
-The client is one file with no dependencies, and does not need the `debug` CLI. Pipe it from the runner:
+The client is one file with no dependencies, and does not need the `debug` CLI. Download it from the runner, then run it:
 
 ```bash
-curl -sf http://runner:3940/client.mjs | node --input-type=module - --cwd /work -e BASE_URL=http://web:4321 playwright tests/a.spec.ts --workers=1
+curl -sf http://runner:3940/client.mjs -o /tmp/runner-client.mjs && node /tmp/runner-client.mjs --cwd /work -e BASE_URL=http://web:4321 playwright tests/a.spec.ts --workers=1
+curl -sf http://runner:3940/client.mjs -o /tmp/runner-client.mjs && node /tmp/runner-client.mjs script scripts/shell/css-coverage.mjs --base http://web:4321 --out /work/.debug-harness/runs/x.json
 ```
 
-The `--input-type=module` is required: plain `node -` fails on Node 20 with `Cannot use import statement outside a module`. Or save it first, which works without the flag:
-
-```bash
-curl -s http://runner:3940/client.mjs -o /tmp/runner-client.mjs
-node /tmp/runner-client.mjs -e BASE_URL=http://web:4321 playwright tests/a.spec.ts --workers=1
-node /tmp/runner-client.mjs script scripts/shell/css-coverage.mjs --base http://web:4321 --out /work/.debug-harness/runs/x.json
-```
+**Do not pipe the client into node** (`curl … | node --input-type=module - …`). When the runner cannot be reached, node runs an empty script and the piped command exits 0 with nothing run, which reads as a pass.
 
 - **Spec arguments must be file paths** (`tests/x.spec.ts`, optionally `:line` or `:line:col`) or folders. A bare name, which Playwright itself would match as a filter, is refused with `path_not_found`. Each selects exactly that path, as a literal, not a regular expression or a substring. Use `--grep` to filter.
 - **`--cwd` is needed when the caller's folder is not under `roots` or `worktreeRoots`.** The client sends its own folder by default, and outside those it is refused with `cwd_outside_root`.
 - **`--output` is optional.** Without it the run gets its own folder under `<resultsDir>/runner`, printed at the start.
 
-`DEBUG_RUNNER_URL` overrides the address. Exit code: the run's own; 128+n if a signal killed it; 124 at the time limit; 125 if it never ran or the result was lost; 2 on bad usage. Killing the client kills the run.
+`DEBUG_RUNNER_URL` overrides the address for the client; the download names its own URL. A failed download stops the command with curl's own non-zero code (6 when the name does not resolve, 22 on an HTTP error), and the client never starts. Once the client is running, the exit code is the run's own; 128+n if a signal killed it; 124 at the time limit; 125 if it never ran or the result was lost; 2 on bad usage. Killing the client kills the run.
 
 Or plain HTTP. The reply is one JSON event per line, and the last line holds the exit code:
 

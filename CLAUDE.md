@@ -21,6 +21,13 @@ Published image: `ghcr.io/maslis/debug-harness:latest` (consumed by per-project
 Rough rule: `capture` for ad-hoc inspection, `audit` for actionable perf/a11y signal,
 `test` for durable specs that live in the project repo.
 
+The test runner's call line. Never pipe the client into node: that form exits 0 when the
+runner cannot be reached.
+
+```bash
+curl -sf http://runner:3940/client.mjs -o /tmp/runner-client.mjs && node /tmp/runner-client.mjs --cwd /work playwright tests/<spec>.spec.ts
+```
+
 ## When NOT to use it
 - CI — this is a local-first tool. (CI projects should run Playwright directly.)
 - Multi-browser checks — Chromium only.
