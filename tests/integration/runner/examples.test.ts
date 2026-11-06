@@ -47,15 +47,27 @@ describe("examples/runner.setalarmclock.json", () => {
 describe("README compose examples", () => {
   const readme = readFileSync("README.md", "utf8");
   const yaml = [...readme.matchAll(/```yaml\n([\s\S]*?)```/g)].map((m) => m[1]!);
+  const WS = "<ws>";
+
+  /** The short-form mounts of one block, with the workspace written as <ws>. */
+  const mounts = (block: string) =>
+    /^ {4}volumes:\n((?: {6}.*\n| {8}.*\n| {10}.*\n)*)/m
+      .exec(block)![1]!
+      .split("\n")
+      .map((l) => /^ {6}- (?!type:)(.+)$/.exec(l)?.[1])
+      .filter((l): l is string => l !== undefined)
+      .map((v) => {
+        const [source, target, mode] = v.replace(/\s+#.*$/, "").replaceAll("${WORKSPACE_DIR:-${PWD}}", WS).split(":");
+        return { source: source!, target: target!, mode };
+      });
+
+  /** The source of the long-form mount that carries the runner's config. */
+  const configSource = (block: string) =>
+    /^ {6}- type: bind\n {8}source: (.+)\n {8}target: \/etc\/debug-harness\/runner\.json\n {8}read_only: true\n {8}bind:\n {10}create_host_path: false\n/m.exec(block)?.[1];
 
   it("both set a restart policy", () => {
     expect(yaml).toHaveLength(2);
     for (const block of yaml) expect(block).toContain("restart: unless-stopped");
-  });
-
-  it("mount runner.json from the host path, like the other volumes", () => {
-    expect(yaml[0]).toContain("${WORKSPACE_DIR:-${PWD}}/.debug-harness/runner.json:/etc/debug-harness/runner.json:ro");
-    expect(readme).not.toContain("./.debug-harness/runner.json");
   });
 
   it("default the workspace the way the project's compose file does", () => {
@@ -65,19 +77,71 @@ describe("README compose examples", () => {
     }
   });
 
-  describe("ProTag: the whole service, and no way to worktrees/", () => {
-    const WS = "<ws>";
-    const mounts = () =>
-      /^ {4}volumes:\n((?: {6}.*\n)*)/m
-        .exec(yaml[1]!)![1]!
-        .split("\n")
-        .map((l) => /^ {6}- (.+)$/.exec(l)?.[1])
-        .filter((l): l is string => l !== undefined)
-        .map((v) => {
-          const [source, target, mode] = v.replace(/\s+#.*$/, "").replaceAll("${WORKSPACE_DIR:-${PWD}}", WS).split(":");
-          return { source: source!, target: target!, mode };
-        });
+  describe.each([
+    ["SetAlarmClock", 0, "setalarmclock"],
+    ["ProTag", 1, "protag"],
+  ] as const)("%s: nothing a run or a worker can write holds the runner's config", (_name, i, project) => {
+    it("takes it from a file outside the workspace, read-only, and never creates it", () => {
+      expect(configSource(yaml[i]!)).toBe(`\${HOME}/.config/debug-harness/${project}.runner.json`);
+    });
 
+    it("every other mount comes from the workspace, and none reaches that file or target", () => {
+      const source = configSource(yaml[i]!)!;
+      for (const m of mounts(yaml[i]!)) {
+        expect(`${source}/`.startsWith(`${m.source}/`), m.source).toBe(false);
+        expect(m.source === WS || m.source.startsWith(`${WS}/`), m.source).toBe(true);
+        expect(m.target).not.toContain("/etc/debug-harness");
+        expect(m.source).not.toContain("runner.json");
+      }
+    });
+
+    it("is read_only, and writes to the results folder only", () => {
+      expect(yaml[i]).toContain("read_only: true");
+      expect(mounts(yaml[i]!).filter((m) => m.mode !== "ro").map((m) => m.target)).toEqual([example(project).resultsDir]);
+    });
+  });
+
+  it("the old layout, with the config in the results folder, is gone", () => {
+    expect(readme).not.toContain(".debug-harness/runner.json");
+  });
+
+  describe("SetAlarmClock: named mounts, so the root's secret files are not there at all", () => {
+    const ROOT_NAMES = ["tests", "playwright.config.ts", "package.json", "scripts", "src", ".worktrees", ".claude/worktrees"];
+
+    it("never mounts the workspace itself, at any path, and has no masks", () => {
+      for (const m of mounts(yaml[0]!)) expect(m.source).not.toBe(WS);
+      expect(yaml[0]).not.toContain("/dev/null");
+    });
+
+    it("mounts exactly the named folders and files, read-only, at /work", () => {
+      const atWork = mounts(yaml[0]!).filter((m) => m.target.startsWith("/work/") && m.mode === "ro");
+      expect(atWork).toEqual(ROOT_NAMES.map((n) => ({ source: `${WS}/${n}`, target: `/work/${n}`, mode: "ro" })));
+    });
+
+    it("mounts the same names at the host-path alias, and the results folder read-only there", () => {
+      const atHost = mounts(yaml[0]!).filter((m) => m.target.startsWith(`${WS}/`));
+      expect(atHost).toEqual([...ROOT_NAMES, ".debug-harness"].map((n) => ({ source: `${WS}/${n}`, target: `${WS}/${n}`, mode: "ro" })));
+    });
+
+    it("no mount is a secret file, in any letter case", () => {
+      for (const m of mounts(yaml[0]!)) expect(m.source).not.toMatch(/\/\.(env|dev\.vars)$/i);
+    });
+
+    it("the config's script folder and worktree roots are under what is mounted", () => {
+      const config = example("setalarmclock");
+      const targets = mounts(yaml[0]!).map((m) => m.target);
+      expect(targets).toContain(`/work/${config.scripts!.dir.split("/")[0]}`);
+      for (const wt of config.worktreeRoots.filter((p) => p.startsWith("/work/"))) expect(targets).toContain(wt);
+    });
+
+    it("says a new top-level name must be added, and states the worktree gap", () => {
+      expect(readme).toMatch(/new top-level name/i);
+      expect(readme).not.toContain("Mask secrets at the root");
+      expect(readme).toContain("Secret files in a mounted worktree are readable");
+    });
+  });
+
+  describe("ProTag: the whole service, and no way to worktrees/", () => {
     it("is a complete service, so it inherits no mount", () => {
       expect(readme).not.toContain("same service with these values");
       expect(yaml[1]).not.toContain("extends");
@@ -87,35 +151,38 @@ describe("README compose examples", () => {
     });
 
     it("mounts what its test service does, without worktrees", () => {
-      expect(mounts()).toEqual([
+      expect(mounts(yaml[1]!)).toEqual([
         { source: `${WS}/tests`, target: "/work/tests", mode: "ro" },
         { source: `${WS}/playwright.config.ts`, target: "/work/playwright.config.ts", mode: "ro" },
         { source: `${WS}/protag/public`, target: "/work/protag-public", mode: "ro" },
         { source: `${WS}/.debug-harness`, target: "/work/.debug-harness", mode: undefined },
         { source: `${WS}/.debug-harness/work-package.json`, target: "/work/package.json", mode: "ro" },
-        { source: `${WS}/.debug-harness/runner.json`, target: "/etc/debug-harness/runner.json", mode: "ro" },
       ]);
     });
 
     it("no mount source holds worktrees/ or is named after it", () => {
-      for (const { source, target } of mounts()) {
+      for (const { source, target } of mounts(yaml[1]!)) {
         expect(`${WS}/worktrees/ID/data/key`.startsWith(`${source}/`), source).toBe(false);
         expect(source).not.toContain("worktrees");
         expect(target).not.toContain("worktrees");
       }
     });
 
-    it("has no host-path alias: only /work and the config are targets", () => {
-      for (const { target } of mounts()) expect(target).toMatch(/^\/(work|etc\/debug-harness)\//);
+    it("has no host-path alias: only /work is a target", () => {
+      for (const { target } of mounts(yaml[1]!)) expect(target).toMatch(/^\/work\//);
     });
 
-    it("writes to the results folder only, and the config agrees", () => {
-      expect(mounts().filter((m) => m.mode !== "ro").map((m) => m.target)).toEqual([example("protag").resultsDir]);
+    it("the config's root is /work", () => {
       expect(example("protag").roots).toEqual(["/work"]);
     });
 
     it("ties the claim to those mounts", () => {
       expect(readme).toMatch(/only with these mounts/i);
     });
+  });
+
+  it("states what a folder with no specs and a non-spec file do", () => {
+    expect(readme).toMatch(/folder with no specs[^.]*exit 1/i);
+    expect(readme).toMatch(/`playwright\.config\.ts`[^.]*`package\.json`[^.]*no tests/i);
   });
 });
