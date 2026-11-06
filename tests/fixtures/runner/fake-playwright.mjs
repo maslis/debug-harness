@@ -41,6 +41,9 @@ if (mode === "dump") {
     process.stdout.write("hanging\n");
     setInterval(() => {}, 1000);
   }
+} else if (mode === "print") {
+  process.stderr.write(`${process.env.FAKE_PRINT}\n`);
+  process.exit(1);
 } else if (mode === "kill-self") {
   process.kill(process.pid, "SIGKILL");
 }

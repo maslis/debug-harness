@@ -38,6 +38,29 @@ function debugRun(args: string[], opts: { env?: Record<string, string>; cwd?: st
 }
 
 describe("runner client", () => {
+  // ProTag builds on this exact line; `curl` is replaced by a file on stdin.
+  it("works piped with node --input-type=module -, exit code and --cwd included", async () => {
+    const proc = spawn(process.execPath, ["--input-type=module", "-", "--cwd", s.root, "-e", "FAKE_MODE=exit:7", "playwright", "tests/a.spec.ts"], {
+      cwd: s.outside,
+      env: { ...process.env, DEBUG_RUNNER_URL: `http://127.0.0.1:${runner.port}` },
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    proc.stdin.end(readFileSync(resolve("bin/runner-client.mjs")));
+    expect(await new Promise((res) => proc.on("close", res))).toBe(7);
+  });
+
+  it("from outside the roots without --cwd, is refused and says so", async () => {
+    const r = await debugRun(["playwright", "tests/a.spec.ts"], { cwd: s.outside }).done;
+    expect(r.code).toBe(125);
+    expect(r.stderr).toContain("cwd_outside_root");
+  });
+
+  it("a bare spec name is refused: arguments are file paths", async () => {
+    const r = await debugRun(["playwright", "a.spec.ts"]).done;
+    expect(r.code).toBe(125);
+    expect(r.stderr).toContain("path_not_found");
+  });
+
   it("returns the run's exit code", async () => {
     const r = await debugRun(["-e", "FAKE_MODE=exit:7", "playwright", "tests/a.spec.ts"]).done;
     expect(r.code).toBe(7);

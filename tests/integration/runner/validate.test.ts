@@ -101,6 +101,22 @@ describe("spec paths", () => {
     expect(refused(resolveRun(s.config(), pw(["../outside/evil.spec.ts:12"])))).toBe("path_outside_root");
   });
 
+  it.each([["tests/a\nb"], ["tests/a\rb"], ["tests/a\u2028b"], ["tests/a\u2029b"], ["\n"], ["tests/a.spec.ts\n"], ["tests/a.spec.ts\n:12"]])(
+    "refuses the line terminator in %j instead of throwing",
+    (arg) => {
+      expect(refused(resolveRun(s.config(), pw([arg])))).toBe("bad_request");
+    },
+  );
+
+  it("refuses an empty argument, which would run the whole suite", () => {
+    expect(refused(resolveRun(s.config(), pw([""])))).toBe("bad_request");
+    expect(refused(resolveRun(s.config(), pw(["tests/a.spec.ts", ""])))).toBe("bad_request");
+  });
+
+  it("refuses a :line with no file, which would also run the whole suite", () => {
+    expect(refused(resolveRun(s.config(), pw([":12"])))).toBe("bad_request");
+  });
+
   it("refuses a NUL byte instead of throwing", () => {
     expect(refused(resolveRun(s.config(), pw(["tests/a\0.spec.ts"])))).toBe("bad_request");
   });
@@ -146,6 +162,29 @@ describe("flags", () => {
   ])("refuses the bad value in %s", (flag) => {
     expect(refused(resolveRun(s.config(), pw([flag])))).toBe("flag_bad_value");
   });
+
+  it.each([["--grep="], ["--project="], ["--workers="], ["--retries="], ["--output="], ["--reporter="], ["--browser="]])(
+    "refuses the empty value in %s",
+    (flag) => {
+      expect(refused(resolveRun(s.config(), pw([flag])))).toBe("flag_bad_value");
+    },
+  );
+
+  it("refuses an empty value given as its own argument", () => {
+    expect(refused(resolveRun(s.config(), pw(["--grep", ""])))).toBe("flag_bad_value");
+    expect(refused(resolveRun(s.config(), pw(["-g", ""])))).toBe("flag_bad_value");
+  });
+
+  it.each([["--workers=1"], ["--workers=16"], ["--workers=50%"], ["--workers=100%"], ["-j=4"]])("allows %s", (flag) => {
+    expect(allowed(resolveRun(s.config(), pw([flag]))).flags).toHaveLength(1);
+  });
+
+  it.each([["--workers=17"], ["--workers=99999999999999999999"], ["--workers=0"], ["--workers=101%"], ["--workers=0%"], ["--workers=007"]])(
+    "refuses %s, past the limit or not a worker count",
+    (flag) => {
+      expect(refused(resolveRun(s.config(), pw([flag])))).toBe("flag_bad_value");
+    },
+  );
 
   it("refuses an allowed flag with no value", () => {
     expect(refused(resolveRun(s.config(), pw(["--workers"])))).toBe("flag_bad_value");

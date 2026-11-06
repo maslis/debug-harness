@@ -259,6 +259,46 @@ describe("refusals", () => {
   });
 });
 
+describe("read-only note", () => {
+  const note = (r: { events: RunEvent[] }) =>
+    r.events.filter((e) => e.type === "output" && e.stream === "stderr" && String(e.data).includes("runner: note:"));
+  const wt = () => join(s.worktrees, "wt1");
+  const printing = (text: string, cwd: string) => ({ command: "playwright", args: [], cwd, env: { FAKE_MODE: "print", FAKE_PRINT: text } });
+
+  it("explains a read-only error once, before the exit event, with the writable folder", async () => {
+    const port = await start();
+    const r = await postRun(port, printing("EROFS: read-only file system, open 'a.png'\nEROFS: read-only file system, open 'b.png'", wt()));
+    expect(note(r)).toHaveLength(1);
+    expect(note(r)[0]!.data).toContain(s.results);
+    expect(r.events.indexOf(note(r)[0]!)).toBeLessThan(r.events.findIndex((e) => e.type === "exit"));
+    expect(exitOf(r.events)).toMatchObject({ code: 1 });
+  });
+
+  it("explains the ENOENT a worktree gets for a results folder it cannot create", async () => {
+    const port = await start();
+    const r = await postRun(port, printing("ENOENT: no such file or directory, open '.debug-harness/runs/x.png'", wt()));
+    expect(note(r)).toHaveLength(1);
+  });
+
+  it("stays quiet on that ENOENT from the root that holds the results folder", async () => {
+    const port = await start();
+    const r = await postRun(port, printing("ENOENT: no such file or directory, open '.debug-harness/runs/x.png'", s.root));
+    expect(note(r)).toHaveLength(0);
+  });
+
+  it("stays quiet on an unrelated ENOENT and on a clean run", async () => {
+    const port = await start();
+    expect(note(await postRun(port, printing("ENOENT: no such file or directory, open 'fixtures/x.json'", wt())))).toHaveLength(0);
+    expect(note(await postRun(port, pw()))).toHaveLength(0);
+  });
+
+  it("does not put the note or the output in the log", async () => {
+    const port = await start();
+    await postRun(port, printing("EROFS: read-only file system, open 'canary-name.png'", wt()));
+    expect(logs.join("\n")).not.toContain("canary-name");
+  });
+});
+
 describe("queue", () => {
   it("runs one at a time, in order", async () => {
     const port = await start();
@@ -436,7 +476,16 @@ describe("health", () => {
     execFileSync("touch", [join(s.root, ".env"), join(s.worktrees, "wt1/.dev.vars")]);
     const port = await start({ secretFiles: [".env", ".dev.vars"] });
     const h = await health(port);
-    expect(h).toMatchObject({ status: "ok", project: "test", running: false, queued: 0 });
-    expect((h.readableSecretFiles as string[]).sort()).toEqual([join(s.root, ".env"), join(s.worktrees, "wt1/.dev.vars")].sort());
+    expect(h).toMatchObject({ status: "ok", project: "test", running: false, queued: 0, readableSecretFileCount: 2 });
+  });
+
+  it("is unauthenticated, so it gives a count and never a file's name or path", async () => {
+    execFileSync("touch", [join(s.root, ".env"), join(s.worktrees, "wt1/.dev.vars")]);
+    const port = await start({ secretFiles: [".env", ".dev.vars"] });
+    const text = await (await fetch(`http://127.0.0.1:${port}/health`)).text();
+    expect(text).not.toContain(".env");
+    expect(text).not.toContain(".dev.vars");
+    expect(text).not.toContain("wt1");
+    expect(text).not.toContain("readableSecretFiles");
   });
 });
