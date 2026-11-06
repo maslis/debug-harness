@@ -58,25 +58,47 @@ SetAlarmClock (`examples/runner.setalarmclock.json`):
     networks: [default]          # only this project's network
     volumes:
       # Read-only at every path workers use, so new untracked specs show at once.
-      - ${WORKSPACE_DIR}:/work:ro
-      - ${WORKSPACE_DIR}:${WORKSPACE_DIR}:ro
-      - ${WORKSPACE_DIR}/.debug-harness:/work/.debug-harness   # the one writable folder
+      - ${WORKSPACE_DIR:-${PWD}}:/work:ro
+      - ${WORKSPACE_DIR:-${PWD}}:${WORKSPACE_DIR:-${PWD}}:ro
+      - ${WORKSPACE_DIR:-${PWD}}/.debug-harness:/work/.debug-harness   # the one writable folder
       # Mask secrets at the root. See the limits below: this does not reach worktrees.
       - /dev/null:/work/.env:ro
       - /dev/null:/work/.dev.vars:ro
-      - /dev/null:${WORKSPACE_DIR}/.env:ro
-      - /dev/null:${WORKSPACE_DIR}/.dev.vars:ro
-      - ${WORKSPACE_DIR}/.debug-harness/runner.json:/etc/debug-harness/runner.json:ro
+      - /dev/null:${WORKSPACE_DIR:-${PWD}}/.env:ro
+      - /dev/null:${WORKSPACE_DIR:-${PWD}}/.dev.vars:ro
+      - ${WORKSPACE_DIR:-${PWD}}/.debug-harness/runner.json:/etc/debug-harness/runner.json:ro
 ```
 
-ProTag (`examples/runner.protag.json`), same service with these values. ProTag does not mount its worktrees: a build under test is copied into the results folder and read through `PROTAG_PUBLIC_DIR`, so `worktreeRoots` is not set, every call uses `--cwd /work`, and the secret files under `worktrees/` are out of reach. `extra_hosts` is left out because these tests do not need real-page mode:
+ProTag (`examples/runner.protag.json`) names each mount instead of mounting the workspace. These are the mounts of its `test` service, minus `worktrees`. A build under test is copied into the results folder and read through `PROTAG_PUBLIC_DIR`, so `worktreeRoots` is not set and every call uses `--cwd /work`. `extra_hosts` is left out because these tests do not need real-page mode:
 
 ```yaml
+  runner:
+    image: ghcr.io/maslis/debug-harness:latest
+    command: ["node", "--experimental-strip-types", "--no-warnings", "/app/src/runner/index.ts"]
+    user: pwuser
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    shm_size: "1gb"
+    mem_limit: 2g
+    tmpfs:
+      - /tmp:mode=1777
+      - /app/artifacts
     networks:
       mysite: {}                 # protag-docker_mysite; protag.test is an alias set on this network
     # No `internal: true`: the PRO-47 tests load Google's public sample ad.
+    volumes:
+      # Never the workspace itself, at any path: it holds worktrees/.
+      - ${WORKSPACE_DIR:-${PWD}}/tests:/work/tests:ro
+      - ${WORKSPACE_DIR:-${PWD}}/playwright.config.ts:/work/playwright.config.ts:ro
+      - ${WORKSPACE_DIR:-${PWD}}/protag/public:/work/protag-public:ro
+      - ${WORKSPACE_DIR:-${PWD}}/.debug-harness:/work/.debug-harness   # the one writable folder
+      - ${WORKSPACE_DIR:-${PWD}}/.debug-harness/work-package.json:/work/package.json:ro
+      - ${WORKSPACE_DIR:-${PWD}}/.debug-harness/runner.json:/etc/debug-harness/runner.json:ro
 ```
+
+The secret files under `worktrees/` are out of a run's reach only with these mounts. Leaving out `worktreeRoots` does not do it: any mount that holds `worktrees/` makes them readable again, under whatever path it is mounted. A file copied into `.debug-harness`, or into a mounted folder, is readable like everything else there, so copy a build's output, not a worktree.
 
 ### Config
 
@@ -102,9 +124,9 @@ JSON at `RUNNER_CONFIG` (default `/etc/debug-harness/runner.json`). Port and hos
 | `sweepDirs` | Folders emptied after every run. Only for a container that does nothing else | `[]` |
 | `secretFiles` | Exact file names looked for in each root and worktree. If a run could read them, `/health` gives the count and the startup log the paths | `.env`, `.dev.vars` |
 
-Rules that are not config: arguments are an argv, never a shell. Paths are resolved through symlinks and must stay in the run's own root. A spec argument with a line break, an empty argument and an empty flag value are refused. `--config` and custom reporters are refused. `NODE_OPTIONS`, `NODE_PATH`, `PATH`, `HOME`, `LD_*` and `DYLD_*` can never be set; `PLAYWRIGHT_*`, `PW_*`, `PWTEST_*` and `PWDEBUG` only when the project lists the exact name. An env value that names a path is not checked: the read-only mount is what protects the repo.
+Rules that are not config: arguments are an argv, never a shell. Paths are resolved through symlinks and must stay in the run's own root. A spec argument with a line break, an empty argument, an empty flag value, a spec whose normalized path starts with `-`, and any value over 100 KB are refused. The final argv puts `--` before the specs. `--config` and custom reporters are refused. `NODE_OPTIONS`, `NODE_PATH`, `PATH`, `HOME`, `LD_*` and `DYLD_*` can never be set; `PLAYWRIGHT_*`, `PW_*`, `PWTEST_*` and `PWDEBUG` only when the project lists the exact name. An env value that names a path is not checked: the read-only mount is what protects the repo.
 
-`--output` must be strictly under `resultsDir`. Because Playwright empties that folder when a run starts, it is also refused for the results folder itself, the runner's run folders, and any non-empty folder without Playwright's `.last-run.json`. A run killed before it finishes leaves no `.last-run.json`, so that folder is refused until someone empties it. Without `--output`, each run gets its own folder, printed at the start.
+`--output` must be strictly under `resultsDir` and cannot hold a line break. Because Playwright empties that folder when a run starts, it is also refused for the results folder itself, the runner's run folders, and any non-empty folder without Playwright's `.last-run.json`. A run killed before it finishes leaves no `.last-run.json`, so that folder is refused until someone empties it. Without `--output`, each run gets its own folder, printed at the start.
 
 ### Calling it
 
@@ -122,7 +144,7 @@ node /tmp/runner-client.mjs -e BASE_URL=http://web:4321 playwright tests/a.spec.
 node /tmp/runner-client.mjs script scripts/shell/css-coverage.mjs --base http://web:4321 --out /work/.debug-harness/runs/x.json
 ```
 
-- **Spec arguments must be file paths** (`tests/x.spec.ts`, optionally `:line`). A bare name, which Playwright itself would match as a filter, is refused with `path_not_found`. Use `--grep` to filter.
+- **Spec arguments must be file paths** (`tests/x.spec.ts`, optionally `:line` or `:line:col`) or folders. A bare name, which Playwright itself would match as a filter, is refused with `path_not_found`. Each selects exactly that path, as a literal, not a regular expression or a substring. Use `--grep` to filter.
 - **`--cwd` is needed when the caller's folder is not under `roots` or `worktreeRoots`.** The client sends its own folder by default, and outside those it is refused with `cwd_outside_root`.
 - **`--output` is optional.** Without it the run gets its own folder under `<resultsDir>/runner`, printed at the start.
 

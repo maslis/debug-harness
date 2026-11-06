@@ -214,7 +214,9 @@ describe("what a spec argument selects, real playwright test --list", () => {
   ])("%s selects itself, not %s", async (file, neighbour) => {
     writeAt(join(s.root, "tests", file), TWO_TESTS);
     writeAt(join(s.root, "tests", neighbour), TWO_TESTS);
-    expect(await listed([`tests/${file}`])).toEqual([`${file}:2:1`, `${file}:3:1`]);
+    // The list shows a backslash as a slash; the neighbour still has to stay out.
+    const shown = file.replace("\\", "/");
+    expect(await listed([`tests/${file}`])).toEqual([`${shown}:2:1`, `${shown}:3:1`]);
   }, 60_000);
 
   it("keeps :line and :line:col on a path with regex characters", async () => {

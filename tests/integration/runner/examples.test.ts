@@ -74,7 +74,7 @@ describe("README compose examples", () => {
         .map((l) => /^ {6}- (.+)$/.exec(l)?.[1])
         .filter((l): l is string => l !== undefined)
         .map((v) => {
-          const [source, target, mode] = v.replaceAll("${WORKSPACE_DIR:-${PWD}}", WS).split(":");
+          const [source, target, mode] = v.replace(/\s+#.*$/, "").replaceAll("${WORKSPACE_DIR:-${PWD}}", WS).split(":");
           return { source: source!, target: target!, mode };
         });
 

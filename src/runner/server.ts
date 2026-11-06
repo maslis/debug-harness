@@ -212,7 +212,8 @@ export async function startRunner(config: RunnerConfig, options: RunnerOptions):
     const output = run.flags.some((f) => f.startsWith("--output=")) ? [] : [`--output=${join(runDir, "output")}`];
     return {
       file: config.playwright.bin,
-      args: ["test", `--config=${run.configPath}`, ...output, ...reporter, ...run.flags, ...run.specs],
+      // The "--" is the second lock: whatever a filter holds, Playwright cannot read it as a flag.
+      args: ["test", `--config=${run.configPath}`, ...output, ...reporter, ...run.flags, ...(run.specFilters.length ? ["--", ...run.specFilters] : [])],
       env,
     };
   }
