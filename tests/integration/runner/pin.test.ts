@@ -32,13 +32,16 @@ function findAll(dir: string, name: string): string[] {
 
 const textOf = (events: RunEvent[]) => events.filter((e) => e.type === "output").map((e) => e.data).join("");
 
-describe("pin hook, real Playwright", () => {
+// SetAlarmClock's specs load through import, a project without "type": "module" through require.
+describe.each(["module", "commonjs"])("pin hook, real Playwright, %s project", (type) => {
+  beforeEach(() => writeFileSync(join(s.root, "package.json"), JSON.stringify({ type })));
+
   it("a failing test with retain-on-failure writes trace.zip, and prints no false package error", async () => {
     writeFileSync(join(s.root, "tests/fail.spec.ts"), `import { test, expect } from "@playwright/test";\ntest("fails", () => { expect(1).toBe(2); });\n`);
     const r = await postRun(runner.port, { command: "playwright", args: ["tests/fail.spec.ts"], cwd: s.root, env: {} });
     const started = r.events.find((e) => e.type === "started") as unknown as { resultsDir: string };
     expect(r.events.at(-1)).toMatchObject({ type: "exit", code: 1 });
-    expect(textOf(r.events)).not.toContain("Cannot find package");
+    expect(textOf(r.events)).not.toMatch(/Cannot find (package|module)/);
     expect(findAll(started.resultsDir, "trace.zip")).toHaveLength(1);
   }, 60_000);
 
@@ -46,10 +49,10 @@ describe("pin hook, real Playwright", () => {
     writeFileSync(
       join(s.root, "tests/core.spec.ts"),
       `import { test, expect } from "@playwright/test";\nimport { chromium } from "playwright-core";\nimport { createRequire } from "node:module";\n` +
-        `test("pinned", () => {\n  expect(typeof chromium.launch).toBe("function");\n  expect(createRequire(import.meta.url).resolve("playwright-core")).toContain("playwright-core@1.59.1");\n});\n`,
+        `test("pinned", () => {\n  expect(typeof chromium.launch).toBe("function");\n  expect(createRequire(process.cwd() + "/x.js").resolve("playwright-core")).toContain("playwright-core@1.59.1");\n});\n`,
     );
     const r = await postRun(runner.port, { command: "playwright", args: ["tests/core.spec.ts"], cwd: s.root, env: {} });
-    expect(textOf(r.events)).not.toContain("Cannot find package");
+    expect(textOf(r.events)).not.toMatch(/Cannot find (package|module)/);
     expect(r.events.at(-1)).toMatchObject({ type: "exit", code: 0 });
   }, 60_000);
 });

@@ -1,4 +1,5 @@
 import { loadRunnerConfig } from "./config.ts";
+import { installProcessGuard } from "./guard.ts";
 import { findReadableSecretFiles, startRunner } from "./server.ts";
 
 const config = loadRunnerConfig(process.env.RUNNER_CONFIG ?? "/etc/debug-harness/runner.json");
@@ -11,6 +12,9 @@ const runner = await startRunner(config, {
   host: process.env.RUNNER_HOST ?? "0.0.0.0",
 });
 
+installProcessGuard(log);
+
+// Names here: this log is only for whoever can read the container's logs. /health gives a count.
 const secrets = findReadableSecretFiles(config);
 log(JSON.stringify({ event: "listening", project: config.project, port: runner.port, readableSecretFiles: secrets }));
 

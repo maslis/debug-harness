@@ -2,10 +2,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunnerConfig } from "./config.ts";
-import { resolveRun, type ResolvedRun } from "./validate.ts";
+import { errorForLog } from "./guard.ts";
+import { isInside, resolveRun, type ResolvedRun } from "./validate.ts";
 
 const MAX_BODY_BYTES = 1_000_000;
 /** What a child takes from the runner's own environment. Everything else stays behind. */
@@ -14,6 +15,8 @@ const PIN_HOOK = fileURLToPath(new URL("./pin-playwright.mjs", import.meta.url))
 const CLIENT_FILE = fileURLToPath(new URL("../../bin/runner-client.mjs", import.meta.url));
 /** After a run exits, how long its output pipes may stay open before they are cut. */
 const PIPE_DRAIN_MS = 1_000;
+/** How much of one output chunk is kept, so a message split across two chunks is still seen. */
+const SCAN_OVERLAP = 300;
 
 export interface RunnerOptions {
   log: (line: string) => void;
@@ -37,6 +40,8 @@ interface LogEntry {
   outcome: string;
   [k: string]: unknown;
 }
+
+const INTERNAL_ERROR = "the runner hit an internal error; check its log";
 
 function send(res: ServerResponse, event: object): boolean {
   if (res.destroyed || res.writableEnded) return true;
@@ -138,6 +143,7 @@ export async function startRunner(config: RunnerConfig, options: RunnerOptions):
   let closing = false;
 
   const log = (entry: LogEntry): void => options.log(JSON.stringify({ ts: new Date().toISOString(), project: config.project, ...entry }));
+  const logInternal = (command: string, err: unknown): void => log({ command, outcome: "internal_error", ...errorForLog(err) });
   const commandName = (raw: unknown): string => {
     const c = (raw as { command?: unknown } | null)?.command;
     return c === "playwright" || c === "script" ? c : "unknown";
@@ -216,29 +222,40 @@ export async function startRunner(config: RunnerConfig, options: RunnerOptions):
     let next: Waiting | undefined;
     while ((next = queue.shift())) {
       if (next.left) continue;
-      const stream = next;
-      // Checked again: while it waited, its files may have changed.
-      const run = resolveRun(config, stream.raw);
-      if ("refused" in run) {
-        log({ command: commandName(stream.raw), outcome: "refused", refused: run.refused });
-        send(stream.res, { type: "refused", code: run.refused, message: run.message });
-        stream.res.end();
-        continue;
-      }
-      let runDir: string;
-      let scratch: { dir: string; tmp: string; home: string };
       try {
-        runDir = makeRunDir();
-        scratch = makeScratch();
-      } catch {
-        log({ command: run.command, outcome: "refused", refused: "results_not_writable" });
-        send(stream.res, { type: "refused", code: "results_not_writable", message: `cannot write under ${config.resultsDir} or ${config.scratchDir}` });
-        stream.res.end();
-        continue;
+        if (startOne(next)) return;
+      } catch (err) {
+        // Runs from a child's exit, where nobody above could answer this client or move the queue.
+        logInternal(commandName(next.raw), err);
+        send(next.res, { type: "refused", code: "internal", message: INTERNAL_ERROR });
+        next.res.end();
       }
-      active = launch(stream, run, runDir, scratch);
-      return;
     }
+  }
+
+  /** False when this request was refused and the next one should get its turn. */
+  function startOne(stream: Waiting): boolean {
+    // Checked again: while it waited, its files may have changed.
+    const run = resolveRun(config, stream.raw);
+    if ("refused" in run) {
+      log({ command: commandName(stream.raw), outcome: "refused", refused: run.refused });
+      send(stream.res, { type: "refused", code: run.refused, message: run.message });
+      stream.res.end();
+      return false;
+    }
+    let runDir: string;
+    let scratch: { dir: string; tmp: string; home: string };
+    try {
+      runDir = makeRunDir();
+      scratch = makeScratch();
+    } catch {
+      log({ command: run.command, outcome: "refused", refused: "results_not_writable" });
+      send(stream.res, { type: "refused", code: "results_not_writable", message: `cannot write under ${config.resultsDir} or ${config.scratchDir}` });
+      stream.res.end();
+      return false;
+    }
+    active = launch(stream, run, runDir, scratch);
+    return true;
   }
 
   function launch(
@@ -264,6 +281,19 @@ export async function startRunner(config: RunnerConfig, options: RunnerOptions):
       for (const [pid, start] of tracked) if (now.get(pid)?.start === start) signalQuietly(pid, "SIGKILL");
     };
 
+    // A run from a worktree cannot create the results folder its specs name, so there the error is ENOENT.
+    const unreachableResults = isInside(run.root, config.resultsDir) ? null : `${basename(config.resultsDir)}/`;
+    let hitReadOnly = false;
+    const scanTail: Record<string, string> = { stdout: "", stderr: "" };
+    const scanForReadOnly = (name: string, data: string): void => {
+      if (hitReadOnly) return;
+      const text = scanTail[name] + data;
+      scanTail[name] = text.slice(-SCAN_OVERLAP);
+      hitReadOnly =
+        /EROFS|read-only file system/i.test(text) ||
+        (unreachableResults !== null && text.split("\n").some((l) => l.includes("ENOENT") && l.includes(unreachableResults)));
+    };
+
     const finish = (code: number | null, signal: NodeJS.Signals | null, failed?: string): void => {
       if (done) return;
       done = true;
@@ -272,7 +302,15 @@ export async function startRunner(config: RunnerConfig, options: RunnerOptions):
       const outcome = failed ?? stopReason ?? "exited";
       const durationMs = Date.now() - startedAt;
       // Before the exit event: when the client hears the run ended, nothing of it is left.
-      removeScratch(scratch.dir);
+      try {
+        removeScratch(scratch.dir);
+      } catch (err) {
+        logInternal(run.command, err);
+      }
+      if (hitReadOnly) {
+        const data = `runner: note: this run hit a read-only path. The repo is mounted read-only here and only ${config.resultsDir} is writable, so a spec that writes elsewhere, or to a relative path from a worktree, fails. See "Running from a worktree" in the debug-harness README.\n`;
+        send(res, { type: "output", stream: "stderr", data });
+      }
       send(res, { type: "exit", code, signal, outcome, durationMs });
       res.end();
       log({
@@ -311,6 +349,7 @@ export async function startRunner(config: RunnerConfig, options: RunnerOptions):
     for (const [name, stream] of [["stdout", child.stdout!], ["stderr", child.stderr!]] as const) {
       stream.setEncoding("utf8");
       stream.on("data", (data: string) => {
+        scanForReadOnly(name, data);
         // A slow client slows the run instead of filling this process's memory.
         if (!send(res, { type: "output", stream: name, data })) {
           stream.pause();
@@ -417,29 +456,41 @@ export async function startRunner(config: RunnerConfig, options: RunnerOptions):
         replyError(res, 400, "bad_request", "body is not JSON");
         return;
       }
-      acceptRun(raw, res);
+      try {
+        acceptRun(raw, res);
+      } catch (err) {
+        failRequest(res, err);
+      }
     });
   }
 
-  const server = createServer((req, res) => {
+  function failRequest(res: ServerResponse, err: unknown): void {
+    logInternal("unknown", err);
+    if (res.headersSent) res.destroy();
+    else replyError(res, 500, "internal", INTERNAL_ERROR);
+  }
+
+  function handleRequest(req: IncomingMessage, res: ServerResponse): void {
+
     const path = (req.url ?? "").split("?")[0];
     if (req.method === "GET" && path === "/health") {
+      const body = JSON.stringify({
+        status: "ok",
+        project: config.project,
+        running: active !== null,
+        queued: queue.length,
+        playwrightVersion: imagePlaywrightVersion(config),
+        // A count: this answers anyone on the network, and the names say where to look.
+        readableSecretFileCount: findReadableSecretFiles(config).length,
+      });
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          status: "ok",
-          project: config.project,
-          running: active !== null,
-          queued: queue.length,
-          playwrightVersion: imagePlaywrightVersion(config),
-          readableSecretFiles: findReadableSecretFiles(config),
-        }),
-      );
+      res.end(body);
       return;
     }
     if (req.method === "GET" && path === "/client.mjs") {
+      const client = readFileSync(CLIENT_FILE);
       res.writeHead(200, { "content-type": "text/javascript" });
-      res.end(readFileSync(CLIENT_FILE));
+      res.end(client);
       return;
     }
     if (req.method === "POST" && path === "/run") {
@@ -448,6 +499,14 @@ export async function startRunner(config: RunnerConfig, options: RunnerOptions):
     }
     req.resume();
     replyError(res, 404, "not_found", "POST /run, GET /health or GET /client.mjs");
+  }
+
+  const server = createServer((req, res) => {
+    try {
+      handleRequest(req, res);
+    } catch (err) {
+      failRequest(res, err);
+    }
   });
 
   await new Promise<void>((res) => server.listen(options.port, options.host, res));

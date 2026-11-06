@@ -38,18 +38,25 @@ export interface ResolvedRun {
 }
 
 const BUILTIN_REPORTERS = new Set(["list", "line", "dot", "json", "junit", "html", "null"]);
-const anything = (): boolean => true;
+const notEmpty = (v: string): boolean => v !== "";
+/** A count past this is a typo or an attack: one run on a memory-capped container. */
+const MAX_WORKERS = 16;
+
+function isWorkerCount(v: string): boolean {
+  const match = /^([1-9][0-9]*)(%?)$/.exec(v);
+  return match !== null && Number(match[1]) <= (match[2] ? 100 : MAX_WORKERS);
+}
 
 const FLAG_VALUE_RULES: Record<string, (v: string) => boolean> = {
-  "--workers": (v) => /^[0-9]+%?$/.test(v),
+  "--workers": isWorkerCount,
   "--browser": (v) => ["chromium", "firefox", "webkit", "all"].includes(v),
-  "--grep": anything,
-  "--project": anything,
+  "--grep": notEmpty,
+  "--project": notEmpty,
   // A reporter that is not built in is a path to code, so only the names pass.
   "--reporter": (v) => v.split(",").every((r) => BUILTIN_REPORTERS.has(r)),
   "--retries": (v) => /^[0-9]+$/.test(v),
   // Checked by checkOutput, which also needs the cwd.
-  "--output": anything,
+  "--output": notEmpty,
 };
 
 const FLAG_ALIASES: Record<string, string> = { "-g": "--grep", "-j": "--workers" };
@@ -64,7 +71,7 @@ function refuse(refused: RefusalCode, message: string): Refusal {
   return { refused, message };
 }
 
-function isInside(parent: string, child: string): boolean {
+export function isInside(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
@@ -173,8 +180,12 @@ function parsePlaywrightArgs(
 }
 
 function checkSpec(arg: string, cwd: string, root: string): string | Refusal {
+  // Each of these terminators stops the "." below, so the regex would find no match.
+  if (/[\n\r\u2028\u2029]/.test(arg)) return refuse("bad_request", "a spec argument cannot hold a line break");
   const match = /^(.*?)(:[0-9]+(?::[0-9]+)?)?$/.exec(arg)!;
   const path = match[1]!;
+  // No file means the cwd, and that means the whole suite.
+  if (path === "") return refuse("bad_request", "a spec argument must name a file");
   const target = resolve(cwd, path);
   if (!isInside(root, target)) return refuse("path_outside_root", `${arg} is outside ${root}`);
   const real = realpathOrNull(target);
