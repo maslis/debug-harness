@@ -6,8 +6,9 @@ const log = (line: string): void => void process.stdout.write(`${line}\n`);
 
 const runner = await startRunner(config, {
   log,
-  port: Number(process.env.PORT ?? 3940),
-  host: process.env.HOST ?? "0.0.0.0",
+  // Not PORT: the image sets that for the harness server.
+  port: Number(process.env.RUNNER_PORT ?? 3940),
+  host: process.env.RUNNER_HOST ?? "0.0.0.0",
 });
 
 const secrets = findReadableSecretFiles(config);

@@ -16,6 +16,7 @@ Published image: `ghcr.io/maslis/debug-harness:latest` (consumed by per-project
 | "Why is perf/a11y/SEO bad here?" (deep audit)         | `audit`       | ~30 s |
 | "Did my fix improve the audit?" (compare 2 audits)    | `audit-diff`  | <1 s  |
 | "Run my project's e2e specs" (durable assertions)     | `test`        | varies|
+| Same, from a container without the Docker socket      | test runner, see README | varies|
 
 Rough rule: `capture` for ad-hoc inspection, `audit` for actionable perf/a11y signal,
 `test` for durable specs that live in the project repo.
