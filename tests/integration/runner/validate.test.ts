@@ -357,3 +357,71 @@ describe("scripts", () => {
 it("refuses an unknown command", () => {
   expect(refused(resolveRun(s.config(), { command: "bash", args: ["-c", "id"], cwd: s.root }))).toBe("bad_request");
 });
+
+describe("a value is checked in the form it ends up in", () => {
+  const scripts = { scripts: { dir: "scripts/shell" } };
+
+  it.each([
+    ["./--config=x", "--config=x"],
+    [".//--config=x", "--config=x"],
+    ["tests/../--config=x", "--config=x"],
+    ["./-c", "-c"],
+    ["./-", "-"],
+    ["./--", "--"],
+    ["./--output=x:12", "--output=x"],
+  ])("refuses the spec %s, which normalizes to a leading dash", (spec, file) => {
+    writeFileSync(join(s.root, file), "\n");
+    expect(refused(resolveRun(s.config(), pw([spec])))).toBe("bad_request");
+    expect(refused(resolveRun(s.config(), pw([join(s.root, spec)])))).toBe("bad_request");
+  });
+
+  it("leaves --output absolute, whatever it was given as", () => {
+    const r = allowed(resolveRun(s.config(), { command: "playwright", args: ["--output=./--config=x"], cwd: s.results }));
+    expect(r.flags).toEqual([`--output=${join(s.results, "--config=x")}`]);
+  });
+
+  it("leaves a script absolute, so a dash in its name is no flag to node", () => {
+    writeFileSync(join(s.root, "scripts/shell/-x.mjs"), "\n");
+    const fromInside = allowed(resolveRun(s.config(scripts), { command: "script", args: ["./-x.mjs"], cwd: join(s.root, "scripts/shell") }));
+    expect(fromInside.scriptPath).toBe(join(s.root, "scripts/shell/-x.mjs"));
+  });
+
+  it("does not change a script argument or an env value", () => {
+    const r = allowed(resolveRun(s.config(scripts), { command: "script", args: ["scripts/shell/ok.mjs", "./--config=x"], cwd: s.root, env: { BASE_URL: "./--x" } }));
+    expect(r.scriptArgs).toEqual(["./--config=x"]);
+    expect(r.env).toEqual({ BASE_URL: "./--x" });
+  });
+
+  it.each([["\n"], ["\r"], ["\v"], ["\f"], ["\u0085"], ["\u2028"], ["\u2029"]])("refuses the line terminator %j in --output", (eol) => {
+    expect(refused(resolveRun(s.config(), pw([`--output=${join(s.results, `o${eol}x`)}`])))).toBe("flag_bad_value");
+    expect(refused(resolveRun(s.config(), pw(["--output", join(s.results, `o${eol}x`)])))).toBe("flag_bad_value");
+  });
+
+  it("leaves a line break in --grep alone", () => {
+    expect(allowed(resolveRun(s.config(), pw(["--grep=a\nb"]))).flags).toEqual(["--grep=a\nb"]);
+  });
+});
+
+describe("value size", () => {
+  const huge = "x".repeat(100_001);
+
+  it.each([[`--grep=${huge}`], [`--project=${huge}`], [`--output=${huge}`], [huge]])("refuses an oversized argument (%#)", (arg) => {
+    expect(refused(resolveRun(s.config(), pw([arg])))).toBe("bad_request");
+  });
+
+  it("refuses an oversized value given as its own argument, env value and script argument", () => {
+    expect(refused(resolveRun(s.config(), pw(["--grep", huge])))).toBe("bad_request");
+    expect(refused(resolveRun(s.config(), pw([], { env: { BASE_URL: huge } })))).toBe("bad_request");
+    const script = { command: "script", args: ["scripts/shell/ok.mjs", huge], cwd: s.root };
+    expect(refused(resolveRun(s.config({ scripts: { dir: "scripts/shell" } }), script))).toBe("bad_request");
+  });
+
+  it("counts bytes, because that is what the kernel limits", () => {
+    expect(refused(resolveRun(s.config(), pw([`--grep=${"é".repeat(50_001)}`])))).toBe("bad_request");
+  });
+
+  it("takes a long value under the limit", () => {
+    const r = allowed(resolveRun(s.config(), pw([`--grep=${"x".repeat(99_000)}`], { env: { BASE_URL: "x".repeat(99_000) } })));
+    expect(r.flags).toHaveLength(1);
+  });
+});

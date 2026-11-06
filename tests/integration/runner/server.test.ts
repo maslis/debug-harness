@@ -82,7 +82,7 @@ describe("run", () => {
     expect(seen.argv).toContain(`--output=${join(started.resultsDir, "output")}`);
     expect(seen.argv).toContain("--reporter=list,json");
     expect(seen.argv).toContain("--workers=1");
-    expect(seen.argv.at(-1)).toBe("tests/a.spec.ts");
+    expect(seen.argv.slice(-2)).toEqual(["--", `^${s.root}/tests/a\\.spec\\.ts$`]);
     expect(seen.env.PLAYWRIGHT_JSON_OUTPUT_FILE).toBe(join(started.resultsDir, "report.json"));
     expect(seen.env.NODE_OPTIONS).toMatch(/^--import=.*pin-playwright\.mjs$/);
     expect(started.resultsDir.startsWith(s.results)).toBe(true);
@@ -487,5 +487,23 @@ describe("health", () => {
     expect(text).not.toContain(".dev.vars");
     expect(text).not.toContain("wt1");
     expect(text).not.toContain("readableSecretFiles");
+  });
+});
+
+describe("oversized values", () => {
+  const huge = "x".repeat(200_000);
+
+  it.each([
+    ["env", () => pw({ BASE_URL: huge })],
+    ["--grep=", () => pw({}, [`--grep=${huge}`])],
+    ["--grep", () => pw({}, ["--grep", huge])],
+    ["script argument", () => ({ command: "script", args: ["scripts/shell/ok.mjs", huge], cwd: s.root })],
+  ])("%s: bad_request before spawn, no run folder, no internal error", async (_name, make) => {
+    const port = await start({ scripts: { dir: "scripts/shell" } });
+    const r = await postRun(port, make());
+    expect(r.status).toBe(400);
+    expect(r.error?.code).toBe("bad_request");
+    expect(existsSync(join(s.results, "runner"))).toBe(false);
+    expect(logs.join("\n")).not.toContain("internal_error");
   });
 });
