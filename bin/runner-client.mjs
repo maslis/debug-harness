@@ -24,7 +24,7 @@ function exitCodeOf(e) {
     console.error("runner-client: the runner could not start the command");
     return NOT_RUN;
   }
-  if (e.code !== null) return e.code;
+  if (Number.isInteger(e.code)) return e.code;
   console.error(`runner-client: the run was killed by ${e.signal}`);
   const n = constants.signals[e.signal];
   return n === undefined ? NOT_RUN : 128 + n;
@@ -91,7 +91,13 @@ function run(body) {
         buf += c;
         let nl;
         while ((nl = buf.indexOf("\n")) >= 0) {
-          onEvent(JSON.parse(buf.slice(0, nl)));
+          try {
+            onEvent(JSON.parse(buf.slice(0, nl)));
+          } catch {
+            // Not the runner talking, or not one of its events. Nobody knows the result.
+            notRun("got an answer that is not the runner's");
+            return;
+          }
           buf = buf.slice(nl + 1);
         }
       });

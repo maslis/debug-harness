@@ -82,19 +82,19 @@ describe("run", () => {
     expect(seen.argv).toContain(`--output=${join(started.resultsDir, "output")}`);
     expect(seen.argv).toContain("--reporter=list,json");
     expect(seen.argv).toContain("--workers=1");
-    expect(seen.argv.slice(-2)).toEqual(["--", `^${s.root}/tests/a\\.spec\\.ts$`]);
+    expect(seen.argv.slice(-2)).toEqual(["--", `/^${s.root}/tests/a\\.spec\\.ts$/`]);
     expect(seen.env.PLAYWRIGHT_JSON_OUTPUT_FILE).toBe(join(started.resultsDir, "report.json"));
     expect(seen.env.NODE_OPTIONS).toMatch(/^--import=.*pin-playwright\.mjs$/);
     expect(started.resultsDir.startsWith(s.results)).toBe(true);
     expect(existsSync(started.resultsDir)).toBe(true);
   });
 
-  it("a client's --reporter replaces the default", async () => {
+  it("a client's --reporter replaces the default, and the JSON report the runner reads stays", async () => {
     const port = await start();
     const out = join(s.base, "argv.json");
     await postRun(port, pw({ FAKE_OUT: out }, ["--reporter=dot"]));
     const seen = JSON.parse(readFileSync(out, "utf8"));
-    expect(seen.argv).toContain("--reporter=dot");
+    expect(seen.argv).toContain("--reporter=dot,json");
     expect(seen.argv).not.toContain("--reporter=list,json");
   });
 

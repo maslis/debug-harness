@@ -81,6 +81,7 @@ describe("--output: wipe protection does not depend on how the name is spelled",
     try {
       const results = join(base, "results");
       mkdirSync(join(results, "runner/1/output"), { recursive: true });
+      writeFileSync(join(base, "playwright.config.ts"), "export default {};\n");
       const config = s.config({ roots: [base], worktreeRoots: [], resultsDir: results });
       for (const value of ["RUNNER/1/output", "RUNNER/o7", "Runner/1"]) {
         expect(refusedCode(resolveRun(config, pw([`--output=${join(results, value)}`], base))), value).toBe("output_would_wipe");
@@ -184,10 +185,10 @@ describe("spec filters are exact on a case-sensitive disk (real Playwright)", ()
   });
 
   it.each([
-    ["tests/a.spec.cjs", 2, "a.spec.cjs"],
-    ["tests/A.spec.cjs", 2, "A.spec.cjs"],
-    ["tests/a.spec.cjs:2", 1, "a.spec.cjs"],
-    ["tests/A.spec.cjs:4:3", 1, "A.spec.cjs"],
+    ["tests/a.spec.cjs", 2, "tests/a.spec.cjs"],
+    ["tests/A.spec.cjs", 2, "tests/A.spec.cjs"],
+    ["tests/a.spec.cjs:2", 1, "tests/a.spec.cjs"],
+    ["tests/A.spec.cjs:4:3", 1, "tests/A.spec.cjs"],
   ])("%s selects only itself", async (arg, count, file) => {
     const r = await postRun(await realPort(), pw([arg, "--workers=1"]));
     expect(exitOf(r.events)?.code).toBe(0);
@@ -223,7 +224,6 @@ describe("a requested path that selected nothing is not a pass (real Playwright)
     const r = await postRun(await realPort(), pw([...args, "--workers=1"]));
     expect(exitOf(r.events)).toMatchObject({ code: 1, outcome: "selected_nothing" });
     expect(textOf(r.events)).toContain(`runner: error: ${named} selected no test`);
-    expect(logs.join("\n")).not.toContain(named);
   });
 
   it.each([

@@ -1,9 +1,16 @@
 import { loadRunnerConfig } from "./config.ts";
 import { installProcessGuard } from "./guard.ts";
 import { findReadableSecretFiles, startRunner } from "./server.ts";
+import { replaceableBin } from "./validate.ts";
 
 const config = loadRunnerConfig(process.env.RUNNER_CONFIG ?? "/etc/debug-harness/runner.json");
 const log = (line: string): void => void process.stdout.write(`${line}\n`);
+
+const replaceableIn = replaceableBin(config);
+if (replaceableIn !== null) {
+  log(JSON.stringify({ event: "refused_to_start", reason: `playwright.bin is under ${replaceableIn}, which a run or a worker can write` }));
+  process.exit(1);
+}
 
 const runner = await startRunner(config, {
   log,

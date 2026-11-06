@@ -6,6 +6,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunnerConfig } from "./config.ts";
 import { errorForLog } from "./guard.ts";
+import { selectionProblem } from "./selection.ts";
 import { isInside, resolveRun, type ResolvedRun } from "./validate.ts";
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -110,14 +111,28 @@ export function findReadableSecretFiles(config: RunnerConfig): string[] {
       // No worktree folder here.
     }
   }
+  const wanted = new Set(config.secretFiles.map((n) => n.toLowerCase()));
   const found: string[] = [];
+  const seen = new Set<string>();
   for (const dir of dirs) {
-    for (const name of config.secretFiles) {
+    let listed: string[] = [];
+    try {
+      listed = readdirSync(dir).filter((n) => wanted.has(n.toLowerCase()));
+    } catch {
+      // Listing may be refused; the exact names below can still be readable.
+    }
+    // Asked for by name too: on a case-insensitive share, a mask hides the listed name and .ENV still reads the file.
+    for (const name of [...listed, ...config.secretFiles, ...config.secretFiles.map((n) => n.toUpperCase())]) {
       const file = join(dir, name);
       try {
+        const info = statSync(file);
         // A mask (a mount of /dev/null) is not a regular file.
-        if (!statSync(file).isFile()) continue;
+        if (!info.isFile()) continue;
         accessSync(file, constants.R_OK);
+        // One file under two spellings, or under two mounts, is one file.
+        const id = `${info.dev}:${info.ino}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
         found.push(file);
       } catch {
         // Absent or unreadable: nothing to report.
@@ -208,12 +223,14 @@ export async function startRunner(config: RunnerConfig, options: RunnerOptions):
       PLAYWRIGHT_HTML_OUTPUT_DIR: join(runDir, "html"),
       PLAYWRIGHT_HTML_OPEN: "never",
     });
+    // The JSON report is always written: finish() reads it, and PLAYWRIGHT_JSON_OUTPUT_FILE keeps it off the client's screen.
+    const flags = run.flags.map((f) => (f.startsWith("--reporter=") && !f.slice(11).split(",").includes("json") ? `${f},json` : f));
     const reporter = run.flags.some((f) => f.startsWith("--reporter=")) ? [] : ["--reporter=list,json"];
     const output = run.flags.some((f) => f.startsWith("--output=")) ? [] : [`--output=${join(runDir, "output")}`];
     return {
       file: config.playwright.bin,
       // The "--" is the second lock: whatever a filter holds, Playwright cannot read it as a flag.
-      args: ["test", `--config=${run.configPath}`, ...output, ...reporter, ...run.flags, ...(run.specFilters.length ? ["--", ...run.specFilters] : [])],
+      args: ["test", `--config=${run.configPath}`, ...output, ...reporter, ...flags, ...(run.specFilters.length ? ["--", ...run.specFilters] : [])],
       env,
     };
   }
@@ -295,12 +312,21 @@ export async function startRunner(config: RunnerConfig, options: RunnerOptions):
         (unreachableResults !== null && text.split("\n").some((l) => l.includes("ENOENT") && l.includes(unreachableResults)));
     };
 
-    const finish = (code: number | null, signal: NodeJS.Signals | null, failed?: string): void => {
+    const finish = (exitCode: number | null, signal: NodeJS.Signals | null, failed?: string): void => {
       if (done) return;
       done = true;
       clearTimeout(limitTimer);
       clearTimeout(graceTimer);
-      const outcome = failed ?? stopReason ?? "exited";
+      let code = exitCode;
+      let outcome = failed ?? stopReason ?? "exited";
+      if (code === 0 && outcome === "exited" && run.specTargets.length > 0) {
+        const problem = selectionProblem(join(runDir, "report.json"), run.specTargets);
+        if (problem) {
+          send(res, { type: "output", stream: "stderr", data: `runner: error: ${problem}\n` });
+          code = 1;
+          outcome = "selected_nothing";
+        }
+      }
       const durationMs = Date.now() - startedAt;
       // Before the exit event: when the client hears the run ended, nothing of it is left.
       try {

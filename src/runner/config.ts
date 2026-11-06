@@ -56,7 +56,7 @@ export const RunnerConfigSchema = z
     maxQueue: z.number().int().nonnegative().default(8),
     /** How many run folders stay under `<resultsDir>/runner`. */
     keepRuns: z.number().int().positive().default(20),
-    /** File names reported by /health and at startup when a run could read them. */
+    /** File names, in any letter case, reported by /health and at startup when a run could read them. */
     secretFiles: z.array(z.string()).default([".env", ".dev.vars"]),
   })
   .strict();

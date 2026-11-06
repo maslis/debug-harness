@@ -8,6 +8,18 @@ import { join } from "node:path";
 const mode = process.env.FAKE_MODE ?? "dump";
 const out = process.env.FAKE_OUT;
 
+// What real Playwright writes for the runner's selection check: one test per filter.
+const report = process.env.PLAYWRIGHT_JSON_OUTPUT_FILE;
+if (report && !process.env.FAKE_NO_REPORT) {
+  const dash = process.argv.indexOf("--");
+  const specs = (dash === -1 ? [] : process.argv.slice(dash + 1)).map((filter) => {
+    const m = /^\/\^(.*)([$/])\/(?::(\d+)(?::(\d+))?)?$/.exec(filter);
+    const path = m[1].replace(/\\(.)/g, "$1");
+    return { file: m[2] === "/" ? join(path, "x.spec.ts") : path, line: Number(m[3] ?? 1), column: Number(m[4] ?? 1) };
+  });
+  writeFileSync(report, JSON.stringify({ config: { rootDir: "/" }, suites: [{ specs }] }));
+}
+
 if (mode === "dump") {
   const seen = { argv: process.argv.slice(2), cwd: process.cwd(), env: process.env };
   if (out) writeFileSync(out, JSON.stringify(seen));
