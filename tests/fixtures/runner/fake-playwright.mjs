@@ -2,7 +2,7 @@
 // Stands in for the playwright binary in the runner tests. FAKE_MODE picks the
 // behaviour; FAKE_OUT is where it records what it was started with.
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const mode = process.env.FAKE_MODE ?? "dump";
@@ -58,4 +58,18 @@ if (mode === "dump") {
   process.exit(1);
 } else if (mode === "kill-self") {
   process.kill(process.pid, "SIGKILL");
+} else if (mode === "span") {
+  // Marks when it runs, for tests on what happens around a run.
+  appendFileSync(out, "start\n");
+  setTimeout(() => {
+    appendFileSync(out, "end\n");
+    process.exit(0);
+  }, 150);
+} else if (mode === "plant") {
+  // What a spec leaves on purpose: one detached process and one double fork, both outside the run's tree.
+  const forever = "setInterval(() => {}, 1000)";
+  spawn(process.execPath, ["-e", forever, process.env.FAKE_MARK], { detached: true, stdio: "ignore" }).unref();
+  spawn("sh", ["-c", `setsid node -e '${forever}' ${process.env.FAKE_MARK} >/dev/null 2>&1 &`], { stdio: "ignore" });
+  writeFileSync(out, "planted");
+  setTimeout(() => process.exit(Number(process.env.FAKE_CODE)), 300);
 }

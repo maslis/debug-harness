@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { RunnerConfig } from "./config.ts";
 import { errorForLog } from "./guard.ts";
 import { selectionProblem } from "./selection.ts";
+import type { Sweep } from "./sweep.ts";
 import { isInside, resolveRun, type ResolvedRun } from "./validate.ts";
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -23,6 +24,8 @@ export interface RunnerOptions {
   log: (line: string) => void;
   port: number;
   host: string;
+  /** Ends every other process, before and after each run. Only the service's own start passes the real one. */
+  sweep?: Sweep;
 }
 
 export interface RunnerHandle {
@@ -152,6 +155,7 @@ function imagePlaywrightVersion(config: RunnerConfig): string | null {
 }
 
 export async function startRunner(config: RunnerConfig, options: RunnerOptions): Promise<RunnerHandle> {
+  const sweep: Sweep = options.sweep ?? (() => ({ clean: true, left: [] }));
   const queue: Waiting[] = [];
   let active: { stop: (reason: string) => void; finished: Promise<void> } | null = null;
   let runCounter = 0;
@@ -253,6 +257,15 @@ export async function startRunner(config: RunnerConfig, options: RunnerOptions):
 
   /** False when this request was refused and the next one should get its turn. */
   function startOne(stream: Waiting): boolean {
+    // Only reached with no run active, and synchronous up to the spawn, so it can never hit a running run.
+    const swept = sweep();
+    if (!swept.clean) {
+      log({ command: commandName(stream.raw), outcome: "refused", refused: "sweep_failed", left: swept.left });
+      const message = `could not end every other process in the container (${swept.left.length} left), so this run was not started. A docker exec as root causes this; otherwise restart the runner`;
+      send(stream.res, { type: "refused", code: "sweep_failed", message });
+      stream.res.end();
+      return false;
+    }
     // Checked again: while it waited, its files may have changed.
     const run = resolveRun(config, stream.raw);
     if ("refused" in run) {
@@ -317,6 +330,12 @@ export async function startRunner(config: RunnerConfig, options: RunnerOptions):
       done = true;
       clearTimeout(limitTimer);
       clearTimeout(graceTimer);
+      // First: past this point nothing the run left behind can touch its report or what comes next.
+      const swept = sweep();
+      if (!swept.clean) {
+        log({ command: run.command, outcome: "sweep_failed", left: swept.left });
+        send(res, { type: "output", stream: "stderr", data: "runner: warning: could not end every process after this run; later runs are refused until that succeeds\n" });
+      }
       let code = exitCode;
       let outcome = failed ?? stopReason ?? "exited";
       if (code === 0 && outcome === "exited" && run.specTargets.length > 0) {

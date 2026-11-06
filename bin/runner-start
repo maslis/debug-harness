@@ -1,0 +1,5 @@
+#!/bin/sh
+# The image's start command for the test runner, so no compose block can forget a
+# flag. --disable-sigusr1: a spec runs as the same user, and SIGUSR1 would otherwise
+# open an inspector into this process. exec: the runner must stay directly under init.
+exec node --disable-sigusr1 --experimental-strip-types --no-warnings "$(dirname "$0")/../src/runner/index.ts"

@@ -65,9 +65,50 @@ describe("README compose examples", () => {
   const configSource = (block: string) =>
     /^ {6}- type: bind\n {8}source: (.+)\n {8}target: \/etc\/debug-harness\/runner\.json\n {8}read_only: true\n {8}bind:\n {10}create_host_path: false\n/m.exec(block)?.[1];
 
+  /** The source of a long-form mount at `target`, only if it is read-only and never created. */
+  const readOnlyFileSource = (block: string, target: string) => {
+    const at = block.indexOf(`        target: ${target}\n        read_only: true\n        bind:\n          create_host_path: false\n`);
+    return at === -1 ? undefined : /source: (.+)\n$/.exec(block.slice(0, at))?.[1];
+  };
+
   it("both set a restart policy", () => {
     expect(yaml).toHaveLength(2);
     for (const block of yaml) expect(block).toContain("restart: unless-stopped");
+  });
+
+  it("both start through the image's start command, which holds the flags, and neither turns the sweep off", () => {
+    for (const block of yaml) {
+      expect(block).toContain('command: ["/app/bin/runner-start"]');
+      expect(block).not.toContain("index.ts");
+      expect(block).not.toContain("RUNNER_PROCESS_SWEEP");
+    }
+  });
+
+  describe("package.json is a stub from outside the workspace, so a checkout cannot take root runs down", () => {
+    const WS_VAR = "${WORKSPACE_DIR:-${PWD}}";
+
+    it("SetAlarmClock: at /work and at the host path, read-only, never created", () => {
+      const source = "${HOME}/.config/debug-harness/setalarmclock.package.json";
+      expect(readOnlyFileSource(yaml[0]!, "/work/package.json")).toBe(source);
+      expect(readOnlyFileSource(yaml[0]!, `${WS_VAR}/package.json`)).toBe(source);
+    });
+
+    it("ProTag: at /work, read-only, never created, and out of the results folder", () => {
+      expect(readOnlyFileSource(yaml[1]!, "/work/package.json")).toBe("${HOME}/.config/debug-harness/protag.package.json");
+      expect(readme).not.toContain("work-package.json");
+    });
+
+    it("no short-form mount brings the workspace's package.json back", () => {
+      for (const block of yaml) for (const m of mounts(block)) {
+        expect(m.source).not.toMatch(/package\.json$/);
+        expect(m.target).not.toMatch(/package\.json$/);
+      }
+    });
+
+    it("the README gives each project's content", () => {
+      expect(readme).toContain(`printf '{"type":"module"}\\n' > ~/.config/debug-harness/setalarmclock.package.json`);
+      expect(readme).toContain(`printf '{}\\n' > ~/.config/debug-harness/protag.package.json`);
+    });
   });
 
   it("default the workspace the way the project's compose file does", () => {
@@ -106,7 +147,7 @@ describe("README compose examples", () => {
   });
 
   describe("SetAlarmClock: named mounts, so the root's secret files are not there at all", () => {
-    const ROOT_NAMES = ["tests", "playwright.config.ts", "package.json", "scripts", "src", ".worktrees", ".claude/worktrees"];
+    const ROOT_NAMES = ["tests", "playwright.config.ts", "scripts", "src", ".worktrees", ".claude/worktrees"];
 
     it("never mounts the workspace itself, at any path, and has no masks", () => {
       for (const m of mounts(yaml[0]!)) expect(m.source).not.toBe(WS);
@@ -155,8 +196,8 @@ describe("README compose examples", () => {
         { source: `${WS}/tests`, target: "/work/tests", mode: "ro" },
         { source: `${WS}/playwright.config.ts`, target: "/work/playwright.config.ts", mode: "ro" },
         { source: `${WS}/protag/public`, target: "/work/protag-public", mode: "ro" },
+        { source: `${WS}/.runner-builds`, target: "/work/builds", mode: "ro" },
         { source: `${WS}/.debug-harness`, target: "/work/.debug-harness", mode: undefined },
-        { source: `${WS}/.debug-harness/work-package.json`, target: "/work/package.json", mode: "ro" },
       ]);
     });
 
@@ -174,6 +215,12 @@ describe("README compose examples", () => {
 
     it("the config's root is /work", () => {
       expect(example("protag").roots).toEqual(["/work"]);
+    });
+
+    it("a build under test lives outside the results folder, read-only", () => {
+      expect(readme).toContain("-e PROTAG_PUBLIC_DIR=/work/builds/<name>");
+      expect(readme).toContain("protag-docker/.runner-builds/<name>/");
+      expect(readme).not.toContain("copied into the results folder");
     });
 
     it("ties the claim to those mounts", () => {

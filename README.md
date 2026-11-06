@@ -44,7 +44,7 @@ SetAlarmClock (`examples/runner.setalarmclock.json`):
 ```yaml
   runner:
     image: ghcr.io/maslis/debug-harness:latest
-    command: ["node", "--experimental-strip-types", "--no-warnings", "/app/src/runner/index.ts"]
+    command: ["/app/bin/runner-start"]
     user: pwuser
     restart: unless-stopped      # workers have no other way to bring it back
     read_only: true              # the only writable places are the two below
@@ -60,7 +60,6 @@ SetAlarmClock (`examples/runner.setalarmclock.json`):
       # Named, never the workspace itself: see "What is mounted" below.
       - ${WORKSPACE_DIR:-${PWD}}/tests:/work/tests:ro
       - ${WORKSPACE_DIR:-${PWD}}/playwright.config.ts:/work/playwright.config.ts:ro
-      - ${WORKSPACE_DIR:-${PWD}}/package.json:/work/package.json:ro
       - ${WORKSPACE_DIR:-${PWD}}/scripts:/work/scripts:ro
       - ${WORKSPACE_DIR:-${PWD}}/src:/work/src:ro
       - ${WORKSPACE_DIR:-${PWD}}/.worktrees:/work/.worktrees:ro
@@ -69,7 +68,6 @@ SetAlarmClock (`examples/runner.setalarmclock.json`):
       # The same names at the repo's host path, which workers also use.
       - ${WORKSPACE_DIR:-${PWD}}/tests:${WORKSPACE_DIR:-${PWD}}/tests:ro
       - ${WORKSPACE_DIR:-${PWD}}/playwright.config.ts:${WORKSPACE_DIR:-${PWD}}/playwright.config.ts:ro
-      - ${WORKSPACE_DIR:-${PWD}}/package.json:${WORKSPACE_DIR:-${PWD}}/package.json:ro
       - ${WORKSPACE_DIR:-${PWD}}/scripts:${WORKSPACE_DIR:-${PWD}}/scripts:ro
       - ${WORKSPACE_DIR:-${PWD}}/src:${WORKSPACE_DIR:-${PWD}}/src:ro
       - ${WORKSPACE_DIR:-${PWD}}/.worktrees:${WORKSPACE_DIR:-${PWD}}/.worktrees:ro
@@ -82,18 +80,36 @@ SetAlarmClock (`examples/runner.setalarmclock.json`):
         read_only: true
         bind:
           create_host_path: false
+      - type: bind
+        source: ${HOME}/.config/debug-harness/setalarmclock.package.json
+        target: /work/package.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${HOME}/.config/debug-harness/setalarmclock.package.json
+        target: ${WORKSPACE_DIR:-${PWD}}/package.json
+        read_only: true
+        bind:
+          create_host_path: false
 ```
 
-**What is mounted.** Only these names, so the root's `.env` and `.dev.vars` are not in the container at all, in any letter case. A `/dev/null` mask cannot do that here: the Mac file share is case-insensitive, so a mask on `.env` leaves `.ENV` readable. `tests`, `playwright.config.ts` and `package.json` are what specs need (measured: `playwright test --list` loads all 854 tests in 49 files with these alone, and no spec reads a file outside `tests/` and `.debug-harness/`). `scripts` and `src` are for `scripts/shell/*.mjs`, which reads `src/styles`. `@playwright/test` comes from the image, so the repo's `node_modules` is not needed. **A new top-level name a spec or script needs must be added here, at both paths**; until then it fails with `ENOENT` or `Cannot find module`. Every one of these names exists in a fresh clone or is created empty by Docker on start (`.worktrees`, `.claude/worktrees`), so a clean checkout starts without preparing anything.
+**What is mounted.** Only these names, so the root's `.env` and `.dev.vars` are not in the container at all, in any letter case. A `/dev/null` mask cannot do that here: the Mac file share is case-insensitive, so a mask on `.env` leaves `.ENV` readable. `tests` and `playwright.config.ts`, with the stub `package.json` below, are what specs need (measured: `playwright test --list` loads all 854 tests in 49 files with these alone, and no spec reads a file outside `tests/` and `.debug-harness/`). `scripts` and `src` are for `scripts/shell/*.mjs`, which reads `src/styles`. `@playwright/test` comes from the image, so the repo's `node_modules` is not needed. **A new top-level name a spec or script needs must be added here, at both paths**; until then it fails with `ENOENT` or `Cannot find module`. Every one of these names exists in a fresh clone or is created empty by Docker on start (`.worktrees`, `.claude/worktrees`), so a clean checkout starts without preparing anything.
 
-**A mount of a single file breaks when the file is replaced.** A `git checkout` or `git pull` that changes `playwright.config.ts` or `package.json` in the main checkout replaces the file, and on the Mac share the path is then missing inside the container. Runs from the root fail until the runner is restarted: `config_not_found` (125) for the config, `Cannot find module '/work/package.json'` (exit 1) for the other. Never a pass. Worktree runs are not affected, and `docker restart <the runner>` brings it back. The folders are not affected: a new file in `tests/` shows at once.
+**`package.json` at the root is a stub, not the repo's file.** A mount of a single file breaks when a `git checkout` or `git pull` replaces that file, so the real one would take every root run down until a restart. The stub lives beside the config, which no checkout touches and no worker can write. A person creates it once, before the first start, and `create_host_path: false` stops Docker from making a folder in its place:
 
-ProTag (`examples/runner.protag.json`) names each mount instead of mounting the workspace. These are the mounts of its `test` service, minus `worktrees`. A build under test is copied into the results folder and read through `PROTAG_PUBLIC_DIR`, so `worktreeRoots` is not set and every call uses `--cwd /work`. `extra_hosts` is left out because these tests do not need real-page mode:
+```bash
+printf '{"type":"module"}\n' > ~/.config/debug-harness/setalarmclock.package.json
+```
+
+It must hold `{"type":"module"}` for SetAlarmClock: with `{}` the suite does not load (`require is not defined in ES module scope`). Worktree runs use the worktree's own `package.json`, as before. The folders are not affected by a checkout either: a new file in `tests/` shows at once.
+
+ProTag (`examples/runner.protag.json`) names each mount instead of mounting the workspace. These are the mounts of its `test` service, minus `worktrees`, plus the builds folder. Builds under test go to `protag-docker/.runner-builds/<name>/`, written by a worker or a person and only read here, and calls use `-e PROTAG_PUBLIC_DIR=/work/builds/<name>`, so `worktreeRoots` is not set and every call uses `--cwd /work`. `extra_hosts` is left out because these tests do not need real-page mode:
 
 ```yaml
   runner:
     image: ghcr.io/maslis/debug-harness:latest
-    command: ["node", "--experimental-strip-types", "--no-warnings", "/app/src/runner/index.ts"]
+    command: ["/app/bin/runner-start"]
     user: pwuser
     restart: unless-stopped
     read_only: true
@@ -112,8 +128,8 @@ ProTag (`examples/runner.protag.json`) names each mount instead of mounting the 
       - ${WORKSPACE_DIR:-${PWD}}/tests:/work/tests:ro
       - ${WORKSPACE_DIR:-${PWD}}/playwright.config.ts:/work/playwright.config.ts:ro
       - ${WORKSPACE_DIR:-${PWD}}/protag/public:/work/protag-public:ro
+      - ${WORKSPACE_DIR:-${PWD}}/.runner-builds:/work/builds:ro
       - ${WORKSPACE_DIR:-${PWD}}/.debug-harness:/work/.debug-harness   # the one writable folder
-      - ${WORKSPACE_DIR:-${PWD}}/.debug-harness/work-package.json:/work/package.json:ro
       # Outside the workspace: see "The config file".
       - type: bind
         source: ${HOME}/.config/debug-harness/protag.runner.json
@@ -121,9 +137,19 @@ ProTag (`examples/runner.protag.json`) names each mount instead of mounting the 
         read_only: true
         bind:
           create_host_path: false
+      - type: bind
+        source: ${HOME}/.config/debug-harness/protag.package.json
+        target: /work/package.json
+        read_only: true
+        bind:
+          create_host_path: false
 ```
 
-The secret files under `worktrees/` are out of a run's reach only with these mounts. Leaving out `worktreeRoots` does not do it: any mount that holds `worktrees/` makes them readable again, under whatever path it is mounted. A file copied into `.debug-harness`, or into a mounted folder, is readable like everything else there, so copy a build's output, not a worktree. `work-package.json` (`{}` is enough) must exist before the service starts, or Docker creates a folder in its place.
+The secret files under `worktrees/` are out of a run's reach only with these mounts. Leaving out `worktreeRoots` does not do it: any mount that holds `worktrees/` makes them readable again, under whatever path it is mounted. A file copied into `.debug-harness`, or into a mounted folder, is readable like everything else there, so copy a build's output, not a worktree. ProTag's stub `package.json` holds `{}` and is made the same way as above:
+
+```bash
+printf '{}\n' > ~/.config/debug-harness/protag.package.json
+```
 
 ### The config file
 
@@ -137,7 +163,7 @@ At start the runner also refuses a `playwright.bin` under `roots`, `worktreeRoot
 
 ### Config
 
-JSON at `RUNNER_CONFIG` (default `/etc/debug-harness/runner.json`). Port and host: `RUNNER_PORT` (3940), `RUNNER_HOST`.
+JSON at `RUNNER_CONFIG` (default `/etc/debug-harness/runner.json`). Port and host: `RUNNER_PORT` (3940), `RUNNER_HOST`. `RUNNER_PROCESS_SWEEP=off` exists only for this repo's own tests; no block sets it, and the startup log shows `processSweep`.
 
 | Key | Meaning | Default |
 |---|---|---|
@@ -162,6 +188,14 @@ JSON at `RUNNER_CONFIG` (default `/etc/debug-harness/runner.json`). Port and hos
 Rules that are not config: arguments are an argv, never a shell. Paths are resolved through symlinks and must stay in the run's own root. A spec argument with a line break, an empty argument, an empty flag value, a spec whose normalized path starts with `-`, any value over 100 KB, a `--cwd` that is a file (`cwd_not_a_directory`) and arguments and env that come to more than 1.5 MB in total are refused. The final argv puts `--` before the specs. `--config` and custom reporters are refused. `NODE_OPTIONS`, `NODE_PATH`, `PATH`, `HOME`, `LD_*` and `DYLD_*` can never be set; `PLAYWRIGHT_*`, `PW_*`, `PWTEST_*` and `PWDEBUG` only when the project lists the exact name. An env value that names a path is not checked: the read-only mount is what protects the repo.
 
 `--output` must be strictly under `resultsDir` and cannot hold a line break. Because Playwright empties that folder when a run starts, it is also refused for the results folder itself, the runner's run folders (compared by device and inode, so another letter case of the name is refused on a case-insensitive share), and any non-empty folder without Playwright's `.last-run.json`. A run killed before it finishes leaves no `.last-run.json`, so that folder is refused until someone empties it. Without `--output`, each run gets its own folder, printed at the start.
+
+### Between runs
+
+**This container runs nothing else, so anything started in it is killed.** Before and after every run, the runner sends SIGKILL to every other process in the container except pid 1, and scans again until a scan finds nothing. That includes a shell or command a person starts with `docker exec`, if it is still there when a run starts or ends. A `docker exec` as root cannot be killed, so runs are refused while one is open.
+
+Runs are strictly one at a time, and the sweep runs in the same step as the start and end of a run, so it cannot hit a running one. If it has not finished after 3 seconds, the run is refused with `sweep_failed` (client exit 125) and never starts. The next request tries again; restart the runner if it keeps happening. A run that ended before such a failure keeps its own exit code and adds a `runner: warning:` line.
+
+Because `kill(-1)` outside its own container would kill every process of that user, the service only starts directly under the image's `tini` as pid 1. It also only starts with `--disable-sigusr1`, which `/app/bin/runner-start` sets. Otherwise it logs `refused_to_start` and exits 1.
 
 ### Calling it
 
@@ -197,26 +231,38 @@ curl -sN http://runner:3940/run -H 'content-type: application/json' \
 Everything except `resultsDir` is read-only, and the writable mount is at `/work/.debug-harness` only. A worktree's own `.debug-harness` is not that folder, and neither is the one under the repo's host path. A spec that uses a relative `.debug-harness/...` path therefore behaves differently from a worktree than from `--cwd /work`. Confirmed on SetAlarmClock:
 
 - **A failure.** `countdown-builder-repeat-yearly` fails with `ENOENT ... open '.debug-harness/runs/round21-lock-...png'`.
-- **A silent skip.** `theme-packages` needs the file `.debug-harness/theme-packages.e2e`, which a worktree cannot have, so it skips all its tests and **exits 0 having run nothing**. A green exit from a worktree does not prove a spec ran: read the skipped count.
+- **A silent skip.** `theme-packages` needs the file `.debug-harness/theme-packages.e2e`. A worktree cannot have it, and from the root an earlier run can remove it. Either way it skips all its tests and **exits 0 having run nothing**. A green exit does not prove a spec ran: read the skipped count.
 
 When a run's output shows `EROFS`, or an `ENOENT` naming the results folder from outside it, the runner adds one `runner: note:` line on stderr before the exit. It cannot see a skip, and it changes no exit code. Run such a spec with `--cwd /work`, or have it write under `resultsDir`.
 
 
 ### What it does not protect against
 
+**The service is not safe against a deliberate attack.** A spec can open the running service's memory through `/proc/<runner>/mem` when the host's `yama/ptrace_scope` is 0, which it was where this was measured, and so it can still fake every later result, **a false pass**. It leaves no process behind, and the sweep and `--disable-sigusr1` do not stop it. Only running specs as a different user from the runner would close it, and that was not built. Tested only as far as opening the file for writing.
+
 **Specs are code.** A spec or script can do anything the runner container can, so the path, flag and env checks only stop mistakes and bad arguments. The protection is what the container lacks: the socket and write access to the repo. These are real gaps, and none of them is closed:
 
+- **Input kept in the results folder can give a false pass.** A run can change anything there, and a later run that reads it as input believes it. Measured: a build kept there (which is why ProTag's builds moved to `/work/builds`), and `tests/theme-packages.spec.ts` with its gate file removed gives `12 skipped`, exit 0. From reading only, not run: `tests/pref-sync.spec.ts` takes its login state from `.debug-harness/runs/state-a.json` and `state-b.json`. The runner cannot see any of this. Keep inputs on a read-only mount.
 - **Other projects' published host ports are reachable.** `host.docker.internal` resolves in the container even without `extra_hosts`, and it reaches every port published on the host, including another project's and including ports bound to 127.0.0.1. Measured with a TCP connect only: Workhub's prod port and host SSH answered. Keeping the runner off other projects' networks only removes their service names, not this route.
 - **Secret files in a mounted worktree are readable.** The SetAlarmClock block still mounts `.worktrees` and `.claude/worktrees`, so each worktree's `.env`, `.dev.vars` and anything else in it can be read by a spec, at both paths. File modes do not help: on the Mac file share (OrbStack) the file's owner shows as whichever uid is asking. The `/health` count only knows the names in `secretFiles`, directly in a root or worktree, so keys under other names or deeper folders are not counted. Closing this needs those copies out of the mounted tree, or worktrees out of the mounts.
 - **A spec can read `/proc/1/environ`.** It runs as the same user as the runner, so whatever the compose service sets in `environment:` is readable. Put no secret there.
-- **A spec can signal the runner.** Same user, and the pid is visible. Measured from a spec: SIGKILL ends the runner, the client exits 125, and `restart: unless-stopped` brings it back with an empty queue. SIGSTOP freezes it: the container still shows as running, `/health` stops answering, the restart policy does not help, and someone has to restart the container by hand. The guarantee that no request can stop the service covers requests, not the code a run executes.
-- **A spec can write to the runner's own `runner/` folder,** like the rest of the results folder: earlier results, other runs' folders and anything else kept there can be changed or removed.
-- **A detached process outlives its run.** One a spec deliberately starts outside its process tree stays after a normal exit, and goes on running beside later runs. It is only caught when the run is stopped by a drop or a timeout.
+- **A spec can signal the runner.** Same user, and the pid is visible. Measured from a spec: SIGKILL ends the runner, the client exits 125, and `restart: unless-stopped` brings it back with an empty queue. SIGSTOP freezes it: the container still shows as running, `/health` stops answering, the restart policy does not help, and someone has to restart the container by hand. SIGUSR1 opens nothing, because the runner starts with `--disable-sigusr1`. The guarantee that no request can stop the service covers requests, not the code a run executes.
+- **A spec can write to the runner's own `runner/` folder,** like the rest of the results folder: earlier results, other runs' folders and anything else kept there can be changed or removed. It can also block later runs (`runner` replaced by a file or a dangling symlink, or `chmod 555`: `results_not_writable`, 125, until someone repairs it) or lose their results (`runner` as a symlink to `/tmp`: exit codes stay right, the folders are swept). Never a pass.
+- **A process a spec starts runs only until its run ends.** A detached process or a double fork goes on running beside that run's own tests and can touch them. It is killed when the run ends, by a normal exit, a drop or a timeout, so it cannot reach a later run.
 - **The project's own network is open.** A spec can reach every service on it, and anything on that network can call the runner: there is no login, so anyone there can queue runs up to `maxQueue`. Requests with an `Origin` header or without a JSON content type are refused, which stops a web page from calling it.
 - **The internet is open** unless the project sets `internal: true`, so a spec can send out anything it can read.
 - **Everything mounted is readable.** With the SetAlarmClock block that is the named folders and every worktree, each worktree's checkout entire. The repo's `.git` and the root's other files are not mounted.
 
-Clean-up covers what a run leaves under its `TMPDIR` and `HOME` and in `sweepDirs`. With the `read_only` setup above there is nowhere else to write except the results folder.
+Clean-up covers what a run leaves under its `TMPDIR` and `HOME` and in `sweepDirs`. With the `read_only` setup above the only other place a run can write is the results folder, plus a name in `/dev/mqueue`: the write fails with `EINVAL`, but the empty name stays into the next run. It holds no content.
+
+**`playwright.config.ts` is still a single-file mount.** A `git checkout` or `git pull` that changes it in the main checkout gives `config_not_found`, exit 125, on root runs until `docker restart <the runner>`, even after a checkout back. Never a pass. Worktree runs are not affected. A `stat` inside the container still answers with the old inode and size while opening the file fails, so it misleads. On SetAlarmClock the file changed 0 times in 90 days.
+
+**Where Compose runs matters.** Bring the service up from a person's shell on the host, never from an app container or anything without `HOME` set, and check `docker compose config | grep runner.json` first. From an app container the start fails on the missing path. A wrong `HOME` or `WORKSPACE_DIR`, including one set in a project's `.env` when the shell has none, can start the service on the wrong folders: a `HOME` pointing at a folder a worker can write gives that worker the config, and neither Compose nor the runner can tell.
+
+**Small things that read oddly.**
+- Over 64 MB of JSON report, an honest passing run exits 1 with "left no readable JSON report". The result is safe; the message is wrong about the cause.
+- A folder whose name ends in `:<digits>` is read as a `:line` selector: `tests/dir:5` gives `path_not_found`, while `tests/dir:5/in.spec.cjs:3` works.
+- `refused_to_start` with `restart: unless-stopped` is a restart loop: the container shows `restarting`, and the reason is only in its logs.
 
 ## Safety
 

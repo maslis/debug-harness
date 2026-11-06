@@ -20,8 +20,8 @@ afterEach(() => {
 function startService(): Promise<number> {
   const configFile = join(s.base, "runner.json");
   writeFileSync(configFile, JSON.stringify({ project: "test", roots: [s.root], resultsDir: s.results, playwright: { bin: FAKE_PLAYWRIGHT } }));
-  proc = spawn(process.execPath, [...NODE_TS, resolve("src/runner/index.ts")], {
-    env: { ...process.env, RUNNER_CONFIG: configFile, RUNNER_PORT: "0", RUNNER_HOST: "127.0.0.1" },
+  proc = spawn(process.execPath, ["--disable-sigusr1", ...NODE_TS, resolve("src/runner/index.ts")], {
+    env: { ...process.env, RUNNER_PROCESS_SWEEP: "off", RUNNER_CONFIG: configFile, RUNNER_PORT: "0", RUNNER_HOST: "127.0.0.1" },
     stdio: ["ignore", "pipe", "inherit"],
   });
   return new Promise((res, rej) => {

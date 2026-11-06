@@ -331,8 +331,8 @@ describe("startup refuses a playwright.bin a run or a worker could replace", () 
   it("the fake binary outside those folders is fine: the service reaches listening", async () => {
     const configFile = join(s.base, "runner.json");
     writeFileSync(configFile, JSON.stringify({ project: "test", roots: [s.root], resultsDir: s.results, playwright: { bin: FAKE_PLAYWRIGHT } }));
-    const proc = spawn(process.execPath, [...NODE_TS, resolve("src/runner/index.ts")], {
-      env: { ...process.env, RUNNER_CONFIG: configFile, RUNNER_PORT: "0", RUNNER_HOST: "127.0.0.1" },
+    const proc = spawn(process.execPath, ["--disable-sigusr1", ...NODE_TS, resolve("src/runner/index.ts")], {
+      env: { ...process.env, RUNNER_PROCESS_SWEEP: "off", RUNNER_CONFIG: configFile, RUNNER_PORT: "0", RUNNER_HOST: "127.0.0.1" },
     });
     let out = "";
     proc.stdout.on("data", (c) => (out += c));

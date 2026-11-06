@@ -14,7 +14,7 @@
     "test:smoke": "vitest run --config vitest.smoke.config.ts",
     "typecheck": "tsc --noEmit",
     "debug": "tsx bin/debug.ts",
-    "runner": "node --experimental-strip-types --no-warnings src/runner/index.ts"
+    "runner": "sh bin/runner-start"
   },
   "dependencies": {
     "@playwright/test": "1.59.1",
