@@ -1,4 +1,4 @@
-import { mkdirSync, symlinkSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RunnerConfigSchema } from "../../../src/runner/config.ts";
@@ -126,7 +126,6 @@ describe("flags", () => {
   it.each([
     ["--config=/tmp/evil.ts"],
     ["-c"],
-    ["--output=/tmp/x"],
     ["--update-snapshots"],
     ["--ui"],
     ["--debug"],
@@ -169,11 +168,84 @@ describe("flags", () => {
   });
 });
 
+describe("--output", () => {
+  const out = (value: string) => resolveRun(s.config(), pw([`--output=${value}`]));
+
+  it("is allowed under the results folder, and written back as an absolute path", () => {
+    expect(allowed(out(join(s.results, "my-output"))).flags).toEqual([`--output=${join(s.results, "my-output")}`]);
+    expect(allowed(out(".debug-harness/a/b")).flags).toEqual([`--output=${join(s.results, "a/b")}`]);
+  });
+
+  it.each([["/tmp/x"], ["tests/out"], [".debug-harness/../tests/out"], ["."]])("refuses %s, outside the results folder", (v) => {
+    expect(refused(out(v))).toBe("output_outside_results");
+  });
+
+  it("refuses a symlink in the path that leaves the results folder", () => {
+    symlinkSync(s.outside, join(s.results, "link"));
+    expect(refused(out(".debug-harness/link/x"))).toBe("output_outside_results");
+    expect(refused(out(".debug-harness/link"))).toBe("output_outside_results");
+  });
+
+  it("refuses a sibling sharing the results folder's prefix", () => {
+    expect(refused(out(`${s.results}-other/x`))).toBe("output_outside_results");
+  });
+
+  // Playwright empties its output folder when a run starts.
+  it("refuses the results folder itself, which Playwright would empty", () => {
+    expect(refused(out(".debug-harness"))).toBe("output_would_wipe");
+  });
+
+  it("refuses the runner's own run folders", () => {
+    expect(refused(out(".debug-harness/runner"))).toBe("output_would_wipe");
+    expect(refused(out(".debug-harness/runner/123"))).toBe("output_would_wipe");
+  });
+
+  it("refuses a folder holding something other than Playwright output", () => {
+    mkdirSync(join(s.results, "baselines"));
+    writeFileSync(join(s.results, "baselines/home.png"), "x");
+    expect(refused(out(".debug-harness/baselines"))).toBe("output_would_wipe");
+  });
+
+  it("refuses a path that is a file", () => {
+    writeFileSync(join(s.results, "file"), "x");
+    expect(refused(out(".debug-harness/file"))).toBe("output_would_wipe");
+  });
+
+  it("allows an empty folder, and an earlier Playwright output folder", () => {
+    mkdirSync(join(s.results, "empty"));
+    expect(allowed(out(".debug-harness/empty")).flags).toHaveLength(1);
+    mkdirSync(join(s.results, "earlier"));
+    writeFileSync(join(s.results, "earlier/.last-run.json"), "{}");
+    writeFileSync(join(s.results, "earlier/trace.zip"), "x");
+    expect(allowed(out(".debug-harness/earlier")).flags).toHaveLength(1);
+  });
+
+  it("hides its value in the log like every other flag", () => {
+    expect(allowed(out(".debug-harness/a")).logArgs).toEqual(["--output=<hidden>"]);
+  });
+
+  it("can be switched off per project", () => {
+    const cfg = s.config({ playwright: { bin: "/x", flags: ["--workers"] } });
+    expect(refused(resolveRun(cfg, pw(["--output=.debug-harness/a"])))).toBe("flag_not_allowed");
+  });
+});
+
 describe("environment", () => {
   const withEnv = (env: Record<string, string>, over = {}) => resolveRun(s.config(over), pw([], { env }));
 
   it("allows names that match a pattern in full", () => {
     expect(allowed(withEnv({ BASE_URL: "http://web", PRO47_X: "1" })).env).toEqual({ BASE_URL: "http://web", PRO47_X: "1" });
+  });
+
+  it("the ProTag names and pattern pass", () => {
+    const allowedEnv = ["BASE_URL", "PROTAG_PUBLIC_DIR", "PROTAG_TEMPLATE", "PRO47_MODE", "PRO47_CLOSE_TYPE", "PRO47_OUT_DIR", "PRO[0-9]+_.*"];
+    const env = { BASE_URL: "x", PROTAG_PUBLIC_DIR: "x", PROTAG_TEMPLATE: "x", PRO47_MODE: "x", PRO47_CLOSE_TYPE: "x", PRO47_OUT_DIR: "x", PRO123_ANY: "x" };
+    expect(allowed(withEnv(env, { allowedEnv })).env).toEqual(env);
+    expect(refused(withEnv({ PROTAG_OTHER: "x" }, { allowedEnv }))).toBe("env_not_allowed");
+  });
+
+  it("does not check a value that names a path: the read-only mount protects the repo", () => {
+    expect(allowed(withEnv({ PRO47_OUT_DIR: "/etc/../outside/anywhere" })).env.PRO47_OUT_DIR).toBe("/etc/../outside/anywhere");
   });
 
   it("anchors patterns", () => {

@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "test:smoke": "vitest run --config vitest.smoke.config.ts",
     "typecheck": "tsc --noEmit",
-    "debug": "tsx bin/debug.ts"
+    "debug": "tsx bin/debug.ts",
+    "runner": "node --experimental-strip-types --no-warnings src/runner/index.ts"
   },
   "dependencies": {
     "@playwright/test": "1.59.1",

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startRunner, type RunnerHandle } from "../../../src/runner/server.ts";
@@ -21,8 +22,8 @@ afterEach(async () => {
   s.cleanup();
 });
 
-function debugRun(args: string[], opts: { env?: Record<string, string>; cwd?: string; url?: string } = {}) {
-  const proc = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", resolve("bin/debug.ts"), "run", ...args], {
+function debugRun(args: string[], opts: { env?: Record<string, string>; cwd?: string; url?: string; client?: string } = {}) {
+  const proc = spawn(process.execPath, [opts.client ?? resolve("bin/runner-client.mjs"), ...args], {
     cwd: opts.cwd ?? s.root,
     env: { ...process.env, DEBUG_RUNNER_URL: opts.url ?? `http://127.0.0.1:${runner.port}`, ...opts.env },
   });
@@ -36,7 +37,7 @@ function debugRun(args: string[], opts: { env?: Record<string, string>; cwd?: st
   return { proc, done, out: () => stdout };
 }
 
-describe("debug run", () => {
+describe("runner client", () => {
   it("returns the run's exit code", async () => {
     const r = await debugRun(["-e", "FAKE_MODE=exit:7", "playwright", "tests/a.spec.ts"]).done;
     expect(r.code).toBe(7);
@@ -85,6 +86,27 @@ describe("debug run", () => {
     expect((await debugRun(["-e"]).done).code).toBe(2);
   });
 
+  it("works as one file, fetched from the runner, with nothing else around it", async () => {
+    const res = await fetch(`http://127.0.0.1:${runner.port}/client.mjs`);
+    expect(res.status).toBe(200);
+    const dir = mkdtempSync(join(tmpdir(), "runner-client-"));
+    try {
+      const client = join(dir, "client.mjs");
+      writeFileSync(client, await res.text());
+      const r = await debugRun(["-e", "FAKE_MODE=exit:7", "--cwd", s.root, "playwright"], { client, cwd: dir }).done;
+      expect(r.code).toBe(7);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not import the debug CLI or anything outside Node", () => {
+    const source = readFileSync("bin/runner-client.mjs", "utf8");
+    const imports = [...source.matchAll(/from "([^"]+)"/g)].map((m) => m[1]!);
+    expect(imports.length).toBeGreaterThan(0);
+    expect(imports.every((i) => i.startsWith("node:"))).toBe(true);
+  });
+
   it("killing the client kills the run", async () => {
     const out = join(s.base, "pids.json");
     const c = debugRun(["-e", "FAKE_MODE=hang", "-e", `FAKE_OUT=${out}`, "playwright"]);
@@ -95,7 +117,7 @@ describe("debug run", () => {
   });
 });
 
-describe("debug run, exit code mapping", () => {
+describe("runner client, exit code mapping", () => {
   it("timeout exits 124", async () => {
     await runner.close();
     runner = await startRunner(s.config({ timeoutMs: 200, killGraceMs: 100 }), { log: () => {}, port: 0, host: "127.0.0.1" });

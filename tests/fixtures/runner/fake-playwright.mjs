@@ -2,7 +2,8 @@
 // Stands in for the playwright binary in the runner tests. FAKE_MODE picks the
 // behaviour; FAKE_OUT is where it records what it was started with.
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const mode = process.env.FAKE_MODE ?? "dump";
 const out = process.env.FAKE_OUT;
@@ -27,6 +28,19 @@ if (mode === "dump") {
   writeFileSync(out, JSON.stringify({ self: process.pid }));
   process.stdout.write("hanging\n");
   setInterval(() => {}, 1000);
+} else if (mode === "litter") {
+  // What a browser run leaves behind: a profile under TMPDIR, a cache under HOME,
+  // and a file at a fixed path that ignores both.
+  mkdirSync(join(process.env.TMPDIR, "playwright_chromiumdev_profile-x"), { recursive: true });
+  writeFileSync(join(process.env.TMPDIR, "playwright_chromiumdev_profile-x/Cookies"), "x");
+  mkdirSync(join(process.env.HOME, ".npm/_cacache"), { recursive: true });
+  writeFileSync(join(process.env.HOME, ".npm/_cacache/x"), "x");
+  if (process.env.FAKE_FIXED) writeFileSync(join(process.env.FAKE_FIXED, "fixed-path"), "x");
+  writeFileSync(out, JSON.stringify({ tmp: process.env.TMPDIR, home: process.env.HOME }));
+  if (process.env.FAKE_THEN_HANG) {
+    process.stdout.write("hanging\n");
+    setInterval(() => {}, 1000);
+  }
 } else if (mode === "kill-self") {
   process.kill(process.pid, "SIGKILL");
 }

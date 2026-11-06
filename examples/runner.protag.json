@@ -1,0 +1,18 @@
+{
+  "project": "protag",
+  "roots": ["/work"],
+  "worktreeRoots": ["/work/worktrees"],
+  "resultsDir": "/work/.debug-harness",
+  "allowedEnv": [
+    "BASE_URL",
+    "PROTAG_PUBLIC_DIR",
+    "PROTAG_TEMPLATE",
+    "PRO47_MODE",
+    "PRO47_CLOSE_TYPE",
+    "PRO47_OUT_DIR",
+    "PRO[0-9]+_.*"
+  ],
+  "scratchDir": "/tmp",
+  "sweepDirs": ["/tmp", "/dev/shm"],
+  "secretFiles": [".env", ".dev.vars"]
+}

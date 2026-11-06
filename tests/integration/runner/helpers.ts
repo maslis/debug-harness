@@ -45,7 +45,7 @@ export function makeSandbox(): Sandbox {
         roots: [root],
         worktreeRoots: [worktrees],
         resultsDir: results,
-        allowedEnv: ["BASE_URL", "PRO[0-9]+_.*", "FAKE_MODE", "FAKE_OUT"],
+        allowedEnv: ["BASE_URL", "PRO[0-9]+_.*", "FAKE_.*"],
         playwright: { bin: FAKE_PLAYWRIGHT },
         ...over,
       }),

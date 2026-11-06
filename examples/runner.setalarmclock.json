@@ -1,0 +1,17 @@
+{
+  "project": "setalarmclock",
+  "roots": ["/work", "/Users/admin/Workspace/projects/setalarmclock-astro"],
+  "worktreeRoots": [
+    "/work/.worktrees",
+    "/work/.claude/worktrees",
+    "/Users/admin/Workspace/projects/setalarmclock-astro/.worktrees",
+    "/Users/admin/Workspace/projects/setalarmclock-astro/.claude/worktrees"
+  ],
+  "resultsDir": "/work/.debug-harness",
+  "allowedEnv": ["BASE_URL"],
+  "defaultEnv": { "BASE_URL": "http://web:4321" },
+  "scripts": { "dir": "scripts/shell" },
+  "scratchDir": "/tmp",
+  "sweepDirs": ["/tmp", "/dev/shm"],
+  "secretFiles": [".env", ".dev.vars"]
+}

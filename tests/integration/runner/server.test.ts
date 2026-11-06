@@ -74,7 +74,7 @@ describe("run", () => {
     const port = await start();
     const out = join(s.base, "argv.json");
     const r = await postRun(port, pw({ FAKE_OUT: out }, ["tests/a.spec.ts", "--workers=1"]));
-    const started = r.events.find((e) => e.type === "started") as { resultsDir: string };
+    const started = r.events.find((e) => e.type === "started") as unknown as { resultsDir: string };
     const seen = JSON.parse(readFileSync(out, "utf8"));
     expect(seen.cwd).toBe(s.root);
     expect(seen.argv[0]).toBe("test");
@@ -135,6 +135,95 @@ describe("run", () => {
   });
 });
 
+describe("--output", () => {
+  it("replaces the runner's default output folder", async () => {
+    const port = await start();
+    const out = join(s.base, "argv.json");
+    await postRun(port, pw({ FAKE_OUT: out }, ["--output=.debug-harness/mine"]));
+    const argv = JSON.parse(readFileSync(out, "utf8")).argv as string[];
+    expect(argv.filter((a) => a.startsWith("--output="))).toEqual([`--output=${join(s.results, "mine")}`]);
+  });
+});
+
+describe("clean-up", () => {
+  const entries = (dir: string) => readdirSync(dir);
+
+  async function start2(fixed: string, over: Parameters<Sandbox["config"]>[0] = {}) {
+    const scratch = join(s.base, "scratch");
+    mkdirSync(scratch, { recursive: true });
+    mkdirSync(fixed, { recursive: true });
+    return { port: await start({ scratchDir: scratch, sweepDirs: [fixed], ...over }), scratch };
+  }
+
+  it("gives each run its own TMPDIR and HOME, and removes them when it ends", async () => {
+    const fixed = join(s.base, "fixed");
+    const { port, scratch } = await start2(fixed);
+    const out = join(s.base, "litter.json");
+    await postRun(port, pw({ FAKE_MODE: "litter", FAKE_OUT: out, FAKE_FIXED: fixed }));
+    const first = JSON.parse(readFileSync(out, "utf8"));
+    expect(first.tmp.startsWith(scratch)).toBe(true);
+    expect(first.home.startsWith(scratch)).toBe(true);
+    expect(first.tmp).not.toBe(first.home);
+    expect(existsSync(first.tmp)).toBe(false);
+    expect(existsSync(first.home)).toBe(false);
+    expect(entries(scratch)).toEqual([]);
+
+    await postRun(port, pw({ FAKE_MODE: "litter", FAKE_OUT: out, FAKE_FIXED: fixed }));
+    expect(JSON.parse(readFileSync(out, "utf8")).tmp).not.toBe(first.tmp);
+  });
+
+  it("sweeps a configured folder of what a run wrote at a fixed path, keeping the folder", async () => {
+    const fixed = join(s.base, "fixed");
+    const { port } = await start2(fixed);
+    const out = join(s.base, "litter.json");
+    await postRun(port, pw({ FAKE_MODE: "litter", FAKE_OUT: out, FAKE_FIXED: fixed }));
+    expect(existsSync(fixed)).toBe(true);
+    expect(entries(fixed)).toEqual([]);
+  });
+
+  it("is clean by the time the client gets the exit event", async () => {
+    const fixed = join(s.base, "fixed");
+    const { port, scratch } = await start2(fixed);
+    const out = join(s.base, "litter.json");
+    const r = await postRun(port, pw({ FAKE_MODE: "litter", FAKE_OUT: out, FAKE_FIXED: fixed }));
+    expect(exitOf(r.events)).toMatchObject({ code: 0 });
+    expect(entries(scratch)).toEqual([]);
+    expect(entries(fixed)).toEqual([]);
+  });
+
+  it("cleans up after a dropped client and after a timeout", async () => {
+    const fixed = join(s.base, "fixed");
+    const { port, scratch } = await start2(fixed, { timeoutMs: 400 });
+    const out = join(s.base, "litter.json");
+    const env = { FAKE_MODE: "litter", FAKE_THEN_HANG: "1", FAKE_OUT: out, FAKE_FIXED: fixed };
+    await postRun(port, pw(env));
+    expect(entries(scratch)).toEqual([]);
+    expect(entries(fixed)).toEqual([]);
+    const open = await openRun(port, pw(env), (e) => e.type === "output");
+    open.drop();
+    await waitForIdle(port);
+    expect(entries(scratch)).toEqual([]);
+    expect(entries(fixed)).toEqual([]);
+  });
+
+  it("sweeps nothing unless a project asks", async () => {
+    const fixed = join(s.base, "fixed");
+    mkdirSync(fixed);
+    const port = await start();
+    const out = join(s.base, "litter.json");
+    await postRun(port, pw({ FAKE_MODE: "litter", FAKE_OUT: out, FAKE_FIXED: fixed }));
+    expect(entries(fixed)).toEqual(["fixed-path"]);
+  });
+
+  it("keeps the results folder across the sweep", async () => {
+    const fixed = join(s.base, "fixed");
+    const { port } = await start2(fixed);
+    const out = join(s.base, "litter.json");
+    const r = await postRun(port, pw({ FAKE_MODE: "litter", FAKE_OUT: out, FAKE_FIXED: fixed }));
+    expect(existsSync((r.events.find((e) => e.type === "started") as unknown as { resultsDir: string }).resultsDir)).toBe(true);
+  });
+});
+
 describe("refusals", () => {
   it("answers 400 with a code, and starts nothing", async () => {
     const port = await start();
@@ -185,8 +274,8 @@ describe("queue", () => {
     first.drop();
     await second.done;
     expect(exitOf(second.events)).toMatchObject({ code: 5 });
-    expect(third.events.some((e) => e.type === "started")).toBe(true);
     await third.done;
+    expect(third.events.some((e) => e.type === "started")).toBe(true);
     expect(exitOf(third.events)).toMatchObject({ code: 6 });
   });
 
@@ -212,7 +301,7 @@ describe("queue", () => {
     await new Promise((r) => setTimeout(r, 100));
     first.drop();
     await first.done;
-    await waitFor(() => JSON.parse(runnerHealthSync(port)).running === false);
+    await waitForIdle(port);
     expect(existsSync(marker)).toBe(false);
   });
 
@@ -233,8 +322,16 @@ describe("queue", () => {
   });
 });
 
-function runnerHealthSync(port: number): string {
-  return execFileSync(process.execPath, ["-e", `fetch("http://127.0.0.1:${port}/health").then(r=>r.text()).then(t=>process.stdout.write(t))`]).toString();
+async function health(port: number): Promise<Record<string, unknown>> {
+  return (await (await fetch(`http://127.0.0.1:${port}/health`)).json()) as Record<string, unknown>;
+}
+
+async function waitForIdle(port: number): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if ((await health(port)).running === false) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error("runner never went idle");
 }
 
 describe("kill", () => {
@@ -338,8 +435,8 @@ describe("health", () => {
     mkdirSync(join(s.worktrees, "wt1/sub"), { recursive: true });
     execFileSync("touch", [join(s.root, ".env"), join(s.worktrees, "wt1/.dev.vars")]);
     const port = await start({ secretFiles: [".env", ".dev.vars"] });
-    const h = JSON.parse(runnerHealthSync(port));
+    const h = await health(port);
     expect(h).toMatchObject({ status: "ok", project: "test", running: false, queued: 0 });
-    expect(h.readableSecretFiles.sort()).toEqual([join(s.root, ".env"), join(s.worktrees, "wt1/.dev.vars")].sort());
+    expect((h.readableSecretFiles as string[]).sort()).toEqual([join(s.root, ".env"), join(s.worktrees, "wt1/.dev.vars")].sort());
   });
 });
