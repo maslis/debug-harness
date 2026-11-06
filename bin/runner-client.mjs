@@ -2,8 +2,7 @@
 // Client for the debug-harness test runner. One file, Node's standard library
 // only: it needs no project, no image copy and no `debug` CLI. Get it from the
 // runner itself:
-//   curl -s http://runner:3940/client.mjs -o /tmp/runner-client.mjs
-//   node /tmp/runner-client.mjs -e BASE_URL=http://web:4321 playwright tests/a.spec.ts --workers=1
+//   curl -sf http://runner:3940/client.mjs -o /tmp/runner-client.mjs && node /tmp/runner-client.mjs --cwd /work -e BASE_URL=http://web:4321 playwright tests/a.spec.ts --workers=1
 //
 // Exit code: the run's own; 128+n if a signal killed it; 124 at the runner's
 // time limit; 125 if it never ran or the result was lost (refused, unreachable,
