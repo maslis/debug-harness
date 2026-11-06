@@ -98,7 +98,7 @@ ProTag (`examples/runner.protag.json`) names each mount instead of mounting the 
       - ${WORKSPACE_DIR:-${PWD}}/.debug-harness/runner.json:/etc/debug-harness/runner.json:ro
 ```
 
-The secret files under `worktrees/` are out of a run's reach only with these mounts. Leaving out `worktreeRoots` does not do it: any mount that holds `worktrees/` makes them readable again, under whatever path it is mounted. A file copied into `.debug-harness`, or into a mounted folder, is readable like everything else there, so copy a build's output, not a worktree.
+The secret files under `worktrees/` are out of a run's reach only with these mounts. Leaving out `worktreeRoots` does not do it: any mount that holds `worktrees/` makes them readable again, under whatever path it is mounted. A file copied into `.debug-harness`, or into a mounted folder, is readable like everything else there, so copy a build's output, not a worktree. `work-package.json` (`{}` is enough) and `runner.json` must exist before the service starts, or Docker creates a folder in their place.
 
 ### Config
 
