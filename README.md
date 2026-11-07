@@ -39,6 +39,8 @@ Runs `playwright test` and allowed scripts for workers in a project container th
 
 Network, aliases and mounts are compose values the project sets. The runner has no code for them.
 
+Both blocks need an image built from this version or later. `/app/bin/runner-start` is not in older images, and with one of them the service does not start.
+
 SetAlarmClock (`examples/runner.setalarmclock.json`):
 
 ```yaml
@@ -197,6 +199,8 @@ Runs are strictly one at a time, and the sweep runs in the same step as the star
 
 Because `kill(-1)` outside its own container would kill every process of that user, the service only starts directly under the image's `tini` as pid 1. It also only starts with `--disable-sigusr1`, which `/app/bin/runner-start` sets. Otherwise it logs `refused_to_start` and exits 1.
 
+The sweep blocks the service while it works. While a root `docker exec` stays open, each waiting request takes up to 3 seconds to be refused, and `GET /health` does not answer until they are done.
+
 ### Calling it
 
 The client is one file with no dependencies, and does not need the `debug` CLI. Download it from the runner, then run it:
@@ -254,6 +258,8 @@ When a run's output shows `EROFS`, or an `ENOENT` naming the results folder from
 - **Everything mounted is readable.** With the SetAlarmClock block that is the named folders and every worktree, each worktree's checkout entire. The repo's `.git` and the root's other files are not mounted.
 
 Clean-up covers what a run leaves under its `TMPDIR` and `HOME` and in `sweepDirs`. With the `read_only` setup above the only other place a run can write is the results folder, plus a name in `/dev/mqueue`: the write fails with `EINVAL`, but the empty name stays into the next run. It holds no content.
+
+A spec can stop this clean-up: a `chmod 000` folder under `/tmp` makes the removal fail, so that folder and anything not yet removed stay for later runs, and each later run logs one `internal_error`. Later runs still report their true result. It could give a false pass only if a later spec reads a fixed path under `/tmp` or `/dev/shm`, the same kind of risk as inputs in the results folder.
 
 **`playwright.config.ts` is still a single-file mount.** A `git checkout` or `git pull` that changes it in the main checkout gives `config_not_found`, exit 125, on root runs until `docker restart <the runner>`, even after a checkout back. Never a pass. Worktree runs are not affected. A `stat` inside the container still answers with the old inode and size while opening the file fails, so it misleads. On SetAlarmClock the file changed 0 times in 90 days.
 
