@@ -1,0 +1,13 @@
+{
+  "project": "protag",
+  "roots": ["/work"],
+  "resultsDir": "/work/.debug-harness",
+  "allowedEnv": [
+    "BASE_URL",
+    "PROTAG_[A-Z0-9_]+",
+    "PRO[0-9]+_[A-Z0-9_]+"
+  ],
+  "scratchDir": "/tmp",
+  "sweepDirs": ["/tmp", "/dev/shm"],
+  "secretFiles": [".env", ".dev.vars"]
+}
